@@ -31,6 +31,7 @@ void TransactionManager::commit()
 
 void TransactionManager::rollback()
 {
+    // TODO, is this valid?
     std::cout << "rollback: " << m_tx_tsv << std::endl;
     this->commit();
 }
