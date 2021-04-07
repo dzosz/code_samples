@@ -1,0 +1,2 @@
+# sudoku-scanner-opencv
+
