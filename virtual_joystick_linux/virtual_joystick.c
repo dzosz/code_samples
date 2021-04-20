@@ -1,6 +1,8 @@
 // README
 // create virtual joystick device that is fed from other devices
-// by default uses mouse wheel to output right gamepad stick
+// default configuration:
+// * uses mouse wheel to output right gamepad stick
+// * when right click is pressed outputs left gamepad stick
 
 
 #include <stdio.h>
@@ -94,7 +96,7 @@ int init_virtual_joystick_fd() {
   ioctl(fd, UI_SET_EVBIT, EV_ABS);
   ioctl(fd, UI_SET_ABSBIT, ABS_X);
   ioctl(fd, UI_SET_ABSBIT, ABS_Y);
-  ioctl(fd, UI_SET_ABSBIT, ABS_RX);
+  //ioctl(fd, UI_SET_ABSBIT, ABS_RX);
   ioctl(fd, UI_SET_ABSBIT, ABS_RY);
 
   struct uinput_user_dev uidev;
@@ -114,10 +116,10 @@ int init_virtual_joystick_fd() {
   uidev.absmin[ABS_Y] = -JOY_MAX;
   uidev.absfuzz[ABS_Y] = 0;
   uidev.absflat[ABS_Y] = ABS_FLAT;
-  uidev.absmax[ABS_RX] = JOY_MAX;
-  uidev.absmin[ABS_RX] = -JOY_MAX;
-  uidev.absfuzz[ABS_RX] = 0;
-  uidev.absflat[ABS_RX] = ABS_FLAT;
+  //uidev.absmax[ABS_RX] = JOY_MAX;
+  //uidev.absmin[ABS_RX] = -JOY_MAX;
+  //uidev.absfuzz[ABS_RX] = 0;
+  //uidev.absflat[ABS_RX] = ABS_FLAT;
   uidev.absmax[ABS_RY] = JOY_MAX;
   uidev.absmin[ABS_RY] = -JOY_MAX;
   uidev.absfuzz[ABS_RY] = 0;
@@ -139,23 +141,60 @@ int init_virtual_joystick_fd() {
 }
 
 void translate_mouse_to_joy(int fd, struct input_event* ev) {
-    static int currentPedalPosition = 0;
+
+    // mouse wheel
     if (ev->type == EV_REL && ev->code == ABS_WHEEL)
     {
+        static int currentPedalPosition = 0;
         currentPedalPosition += (ev->value * JOY_MAX*2/MWHEEL_STEP_NUMBER);
         currentPedalPosition = MAX(-JOY_MAX, MIN(JOY_MAX, currentPedalPosition));
         emit(fd, EV_ABS, MWHEEL_AXIS_TRANSLATION, currentPedalPosition);
         emit(fd, EV_SYN, SYN_REPORT, 0);
         //printf("current pos: %d\n", currentPedalPosition);
         //fflush(stdout);
+        return;
     }
-    /*
-    if (ev.type == EV_KEY && ev.code == BTN_LEFT)
+
+    /* TODO mouse moves need to be translated to ABS axis first, so when right button
+     * is pressed mouse moves can be translated to different axis for freelook
+     *
+    else if (!freelookEnabled && ev->type == EV_REL && ev->code == REL_X)
     {
-        emit(joy_fd, EV_KEY, BTN_X, ev.value);
-        emit(joy_fd, EV_SYN, SYN_REPORT, 0);
+        emit(fd, TODO
+        emit(fd, EV_SYN, SYN_REPORT, 0);
+        return;
     }
     */
+
+    static int freelookEnabled = 0;
+    // freelook activated on right mouse press
+    static int freelookX=0, freelookY = 0;
+    if (ev->type == EV_REL && freelookEnabled) {
+        if (ev->code == REL_X) {
+            freelookX += ev->value;
+            freelookX = MAX(-JOY_MAX, MIN(JOY_MAX, freelookX));
+            emit(fd, EV_ABS, ABS_X, freelookX);
+            emit(fd, EV_SYN, SYN_REPORT, 0);
+        }
+        else if (ev->code == REL_Y) {
+            freelookY += ev->value;
+            freelookY = MAX(-JOY_MAX, MIN(JOY_MAX, freelookY));
+            emit(fd, EV_ABS, ABS_Y, freelookY);
+            emit(fd, EV_SYN, SYN_REPORT, 0);
+        }
+    }
+    if (ev->type == EV_KEY && ev->code == BTN_RIGHT)
+    {
+        freelookEnabled = ev->value;
+        // reset axis
+        if (!freelookEnabled) {
+            freelookX = 0;
+            freelookY = 0;
+            emit(fd, EV_ABS, ABS_X, freelookX);
+            emit(fd, EV_ABS, ABS_Y, freelookY);
+            emit(fd, EV_SYN, SYN_REPORT, 0);
+        }
+    }
 }
 
 
