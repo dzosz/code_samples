@@ -1,0 +1,1 @@
+if you want to observe the page fault, you need to force reads from disk. The following code maps the file given on the command-line, telling the kernel it doesn't need it; if the file is large enough (pick a large file in /usr/bin), you'll always get major page faults
