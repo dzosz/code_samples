@@ -178,7 +178,7 @@ void translate_mouse_to_joy(int fd, struct input_event* ev) {
         emit(fd, EV_ABS, ABS_GAS, newPos);
         //emit(fd, EV_ABS, ABS_BRAKE, newPos);
         emit(fd, EV_SYN, SYN_REPORT, 0);
-        printf("current pos: %d\n", newPos); fflush(stdout);
+        // printf("current pos: %d\n", newPos); fflush(stdout);
         return;
     }
 
