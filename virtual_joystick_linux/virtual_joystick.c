@@ -13,17 +13,19 @@
 #include <errno.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
+#include <math.h> // round
 
 // jesus
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 // user configuration
-const char* MOUSE_DEVICE="/dev/input/event6";
-const int MWHEEL_AXIS_TRANSLATION = ABS_RY;
-const int MWHEEL_STEP_NUMBER = 10; // depends how smooth mouse wheel is
+const char* MOUSE_DEVICE="/dev/input/event5"; // cat /proc/bus/input/devices and look for mouse
+const int MOUSEWHEEL_STEPS = 10; // depends how smooth mouse wheel is
 const int JOY_MAX = 512;
+const int JOY_MIN = -512;
 const int ABS_FLAT = 15;
+const static float FREELOOK_SENSITIVITY = 0.2;
 
 void emit(int fd, int type, int code, int val)
 {
@@ -58,11 +60,9 @@ int init_mouse_fd()
 struct input_event read_mouse_event(int fd)
 {
     struct input_event ev;
-    while (1) {
-        if (read(fd, &ev, sizeof(ev)) > 0) {
-            //printf("type : %d, code : %d, value : %d \n", ev.type, ev.code, ev.value);
-            return ev;
-        }
+    if (read(fd, &ev, sizeof(ev)) > 0) {
+        //printf("type : %d, code : %d, value : %d \n", ev.type, ev.code, ev.value);
+        return ev;
     }
 }
 
@@ -97,33 +97,57 @@ int init_virtual_joystick_fd() {
   ioctl(fd, UI_SET_ABSBIT, ABS_X);
   ioctl(fd, UI_SET_ABSBIT, ABS_Y);
   //ioctl(fd, UI_SET_ABSBIT, ABS_RX);
-  ioctl(fd, UI_SET_ABSBIT, ABS_RY);
+  //ioctl(fd, UI_SET_ABSBIT, ABS_RY);
+  ioctl(fd, UI_SET_ABSBIT, ABS_GAS);
+  ioctl(fd, UI_SET_ABSBIT, ABS_BRAKE);
+  //ioctl(fd, UI_SET_ABSBIT, ABS_WHEEL);
 
   struct uinput_user_dev uidev;
   memset(&uidev, 0, sizeof(uidev));
-  snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "Generic Gamepad");
   uidev.id.bustype = BUS_USB;
-  uidev.id.vendor  = 0x3;
-  uidev.id.product = 0x3;
+
+  if (1) {
+      snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "ThurstMaster T150");
+      uidev.id.vendor  = 0x044f; uidev.id.product = 0xb677;
+  } else {
+      snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "Generic Gamepad");
+      uidev.id.vendor  = 0x3; uidev.id.product = 0x3;
+  }
+
   uidev.id.version = 2;
 
-  // left/right sticks
+  // setup controller axis
   uidev.absmax[ABS_X] = JOY_MAX;
-  uidev.absmin[ABS_X] = -JOY_MAX;
+  uidev.absmin[ABS_X] = JOY_MIN;
   uidev.absfuzz[ABS_X] = 0;
   uidev.absflat[ABS_X] = ABS_FLAT;
+
   uidev.absmax[ABS_Y] = JOY_MAX; 
-  uidev.absmin[ABS_Y] = -JOY_MAX;
+  uidev.absmin[ABS_Y] = JOY_MIN;
   uidev.absfuzz[ABS_Y] = 0;
   uidev.absflat[ABS_Y] = ABS_FLAT;
+
+  uidev.absmax[ABS_GAS] = JOY_MAX;
+  uidev.absmin[ABS_GAS] = JOY_MIN;
+  uidev.absfuzz[ABS_GAS] = 0;
+  //uidev.absflat[ABS_GAS] = ABS_FLAT;
+
+  uidev.absmax[ABS_BRAKE] = JOY_MAX;
+  uidev.absmin[ABS_BRAKE] = JOY_MIN;
+  uidev.absfuzz[ABS_BRAKE] = 0;
+  uidev.absflat[ABS_BRAKE] = ABS_FLAT;
+  //uidev.absmax[ABS_WHEEL] = JOY_MAX; 
+  //uidev.absmin[ABS_WHEEL] = JOY_MIN;
+  //uidev.absfuzz[ABS_WHEEL] = 0;
+  //uidev.absflat[ABS_WHEEL] = ABS_FLAT;
   //uidev.absmax[ABS_RX] = JOY_MAX;
-  //uidev.absmin[ABS_RX] = -JOY_MAX;
+  //uidev.absmin[ABS_RX] = JOY_MIN;
   //uidev.absfuzz[ABS_RX] = 0;
   //uidev.absflat[ABS_RX] = ABS_FLAT;
-  uidev.absmax[ABS_RY] = JOY_MAX;
-  uidev.absmin[ABS_RY] = -JOY_MAX;
-  uidev.absfuzz[ABS_RY] = 0;
-  uidev.absflat[ABS_RY] = ABS_FLAT;
+  //uidev.absmax[ABS_RY] = JOY_MAX;
+  //uidev.absmin[ABS_RY] = JOY_MIN;
+  //uidev.absfuzz[ABS_RY] = 0;
+  //uidev.absflat[ABS_RY] = ABS_FLAT;
 
   if(write(fd, &uidev, sizeof(uidev)) < 0)
   {
@@ -145,47 +169,39 @@ void translate_mouse_to_joy(int fd, struct input_event* ev) {
     // mouse wheel
     if (ev->type == EV_REL && ev->code == ABS_WHEEL)
     {
-        static int currentPedalPosition = 0;
-        currentPedalPosition += (ev->value * JOY_MAX*2/MWHEEL_STEP_NUMBER);
-        currentPedalPosition = MAX(-JOY_MAX, MIN(JOY_MAX, currentPedalPosition));
-        emit(fd, EV_ABS, MWHEEL_AXIS_TRANSLATION, currentPedalPosition);
+        const static float stepChange = 1.0*(JOY_MAX-JOY_MIN)/MOUSEWHEEL_STEPS;
+        static float currentPedalPosition = 0;
+
+        currentPedalPosition += ev->value * stepChange;
+        currentPedalPosition = MAX(JOY_MIN, MIN(JOY_MAX, currentPedalPosition));
+        int newPos = round(currentPedalPosition);
+        emit(fd, EV_ABS, ABS_GAS, newPos);
+        //emit(fd, EV_ABS, ABS_BRAKE, newPos);
         emit(fd, EV_SYN, SYN_REPORT, 0);
-        //printf("current pos: %d\n", currentPedalPosition);
-        //fflush(stdout);
+        printf("current pos: %d\n", newPos); fflush(stdout);
         return;
     }
 
-    /* TODO mouse moves need to be translated to ABS axis first, so when right button
-     * is pressed mouse moves can be translated to different axis for freelook
-     *
-    else if (!freelookEnabled && ev->type == EV_REL && ev->code == REL_X)
-    {
-        emit(fd, TODO
-        emit(fd, EV_SYN, SYN_REPORT, 0);
-        return;
-    }
-    */
-
-    static int freelookEnabled = 0;
     // freelook activated on right mouse press
-    static int freelookX=0, freelookY = 0;
+    static int freelookEnabled = 0;
+    static float freelookX=0, freelookY = 0;
     if (ev->type == EV_REL && freelookEnabled) {
         if (ev->code == REL_X) {
-            freelookX += ev->value;
-            freelookX = MAX(-JOY_MAX, MIN(JOY_MAX, freelookX));
-            emit(fd, EV_ABS, ABS_X, freelookX);
+            freelookX += ev->value * FREELOOK_SENSITIVITY;
+            freelookX = MAX(JOY_MIN, MIN(JOY_MAX, freelookX));
+            emit(fd, EV_ABS, ABS_X, round(freelookX));
             emit(fd, EV_SYN, SYN_REPORT, 0);
         }
         else if (ev->code == REL_Y) {
-            freelookY += ev->value;
-            freelookY = MAX(-JOY_MAX, MIN(JOY_MAX, freelookY));
-            emit(fd, EV_ABS, ABS_Y, freelookY);
+            freelookY += ev->value * FREELOOK_SENSITIVITY;
+            freelookY = MAX(JOY_MIN, MIN(JOY_MAX, (int)freelookY));
+            emit(fd, EV_ABS, ABS_Y, round(freelookY));
             emit(fd, EV_SYN, SYN_REPORT, 0);
         }
     }
-    if (ev->type == EV_KEY && ev->code == BTN_RIGHT)
+    if (ev->type == EV_KEY && ev->code == BTN_RIGHT && ev->value == 1)
     {
-        freelookEnabled = ev->value;
+        freelookEnabled = !freelookEnabled;
         // reset axis
         if (!freelookEnabled) {
             freelookX = 0;
@@ -194,6 +210,7 @@ void translate_mouse_to_joy(int fd, struct input_event* ev) {
             emit(fd, EV_ABS, ABS_Y, freelookY);
             emit(fd, EV_SYN, SYN_REPORT, 0);
         }
+        printf("switching freelook to: %d\n", freelookEnabled); fflush(stdout);
     }
 }
 
