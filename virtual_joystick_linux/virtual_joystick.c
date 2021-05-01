@@ -130,7 +130,7 @@ int init_virtual_joystick_fd() {
   uidev.absmax[ABS_GAS] = JOY_MAX;
   uidev.absmin[ABS_GAS] = JOY_MIN;
   uidev.absfuzz[ABS_GAS] = 0;
-  //uidev.absflat[ABS_GAS] = ABS_FLAT;
+  uidev.absflat[ABS_GAS] = ABS_FLAT;
 
   uidev.absmax[ABS_BRAKE] = JOY_MAX;
   uidev.absmin[ABS_BRAKE] = JOY_MIN;
@@ -175,8 +175,8 @@ void translate_mouse_to_joy(int fd, struct input_event* ev) {
         currentPedalPosition += ev->value * stepChange;
         currentPedalPosition = MAX(JOY_MIN, MIN(JOY_MAX, currentPedalPosition));
         int newPos = round(currentPedalPosition);
-        emit(fd, EV_ABS, ABS_GAS, newPos);
-        //emit(fd, EV_ABS, ABS_BRAKE, newPos);
+        //emit(fd, EV_ABS, ABS_GAS, newPos); // FIXME ABS_GAS might be detected as same axis as ABS_Y. temporarily use ABS_BRAKE instead
+        emit(fd, EV_ABS, ABS_BRAKE, newPos);
         emit(fd, EV_SYN, SYN_REPORT, 0);
         // printf("current pos: %d\n", newPos); fflush(stdout);
         return;
