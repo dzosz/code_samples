@@ -62,7 +62,6 @@ fn _calculate_fft(input: &mut OutputT) {
 
     // combine
     for k in 0..n / 2 {
-        // t= std::complex(r * cos(theta), r * sin(theta))
         let t = transform_using_waves(k, 1, n) * odd[k];
         input[k] = even[k] + t;
         input[k + n / 2] = even[k] - t;
@@ -81,8 +80,8 @@ fn get_optional_user_input() -> InputT {
     return vec![1.0, 2.0, 3.0, 4.0];
 }
 
-struct ComplexComparatorWrapper(pub OutputT);
-impl PartialEq for ComplexComparatorWrapper {
+struct ComplexComparatorWrapper<'a>(pub &'a OutputT);
+impl PartialEq for ComplexComparatorWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.0.len() == self.0.len()
             && self.0.iter().zip(other.0.iter()).any(|(left, right)| {
@@ -91,7 +90,7 @@ impl PartialEq for ComplexComparatorWrapper {
             })
     }
 }
-impl Eq for ComplexComparatorWrapper {}
+impl Eq for ComplexComparatorWrapper<'_> {}
 
 fn main() {
     let input = get_optional_user_input();
@@ -100,7 +99,7 @@ fn main() {
     let fft_output = calculate_fft(&input);
     println!("Output DFT:\n {:?}", dft_output);
     println!("Output FFT:\n {:?}", fft_output);
-    let equal = ComplexComparatorWrapper(dft_output) == ComplexComparatorWrapper(fft_output); // TODO use refernce wrapper?
+    let equal = ComplexComparatorWrapper(&dft_output) == ComplexComparatorWrapper(&fft_output);
     println!("\nIs (FFT==DFT) {}", equal);
     assert!(equal, "computations from FFT and DFT are not equal");
 }
