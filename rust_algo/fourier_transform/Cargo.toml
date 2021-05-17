@@ -5,3 +5,4 @@ authors = ["B <b@example.com>"]
 
 [dependencies]
 num = "0.4"
+float-cmp = "*"
