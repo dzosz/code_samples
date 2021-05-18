@@ -1,5 +1,5 @@
 [package]
-name = "discrete_fourier_transform_by_hand" # the name of the package
+name = "fourier_transform_by_hand"
 version = "0.1.0"    # the current version, obeying semver
 authors = ["B <b@example.com>"]
 

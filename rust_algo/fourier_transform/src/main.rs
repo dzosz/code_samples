@@ -15,10 +15,14 @@ type OutputT = Vec<Complex<f64>>;
 // ck[i] = cos(2pi * k * i/N)
 // sk[i] = sin(2pi * k * i/N)
 // x[i]  = sum(ck) + i * sum(sk)
+// Returns a complex number with magnitude r and phase angle theta.
+fn polar(theta: f64, n: usize) -> Complex<f64> {
+    let angle = -theta * std::f64::consts::PI / n as f64;
+    Complex::new(angle.cos(), angle.sin())
+}
 
-fn transform_using_waves(k: usize, j: usize, n: usize) -> Complex<f64> {
-    let common = (2 * k * j) as f64 * std::f64::consts::PI * -1.0 / n as f64;
-    Complex::new(common.cos(), common.sin())
+fn is_power_of_two(n : usize) -> bool {
+    n != 0 && (n & (n-1) == 0)
 }
 
 fn calculate_dft(input: &InputT) -> OutputT {
@@ -27,13 +31,15 @@ fn calculate_dft(input: &InputT) -> OutputT {
 
     for (k, elem) in output.iter_mut().enumerate() {
         for j in 0..input.len() {
-            *elem += transform_using_waves(k, j, input.len()) * input[j] as f64;
+            *elem += polar((k*j) as f64, input.len()) * input[j] as f64;
         }
     }
     output
 }
 
 fn calculate_fft(input: &InputT) -> OutputT {
+    assert!(is_power_of_two(input.len()), "this fft algorithm requires input size of power of 2");
+
     let mut output: OutputT = input
         .iter()
         .map(|val| Complex::new(*val, 0.0))
@@ -50,7 +56,6 @@ fn _calculate_fft(input: &mut OutputT) {
     if n <= 1 {
         return;
     }
-    assert!(n % 2 == 0);
 
     // divide
     let mut even: OutputT = input.iter().step_by(2).copied().collect();
@@ -62,7 +67,7 @@ fn _calculate_fft(input: &mut OutputT) {
 
     // combine
     for k in 0..n / 2 {
-        let t = transform_using_waves(k, 1, n) * odd[k];
+        let t = polar(k as f64, n) * odd[k];
         input[k] = even[k] + t;
         input[k + n / 2] = even[k] - t;
     }
