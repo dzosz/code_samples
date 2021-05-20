@@ -91,14 +91,18 @@ fn get_optional_user_input() -> DataT {
     return vec![Complex{re:1.0,im:0.0}, Complex{re:2.0, im:0.0}, Complex{re:3.0, im:0.0}, Complex{re:4.0,im:0.0}]; // default
 }
 
+fn eq_complex_vector(left: &DataT, right: &DataT) -> bool {
+    ComplexComparatorWrapper(&left) == ComplexComparatorWrapper(&right)
+}
+
 struct ComplexComparatorWrapper<'a>(pub &'a DataT);
 impl PartialEq for ComplexComparatorWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
-        let arbitraryAcceptableDifference = 0.001;
+        let arbitrary_acceptable_difference = 0.001;
         self.0.len() == self.0.len()
             && self.0.iter().zip(other.0.iter()).all(|(left, right)| {
-                num::abs(left.re - right.re) < arbitraryAcceptableDifference
-                && num::abs(left.im - right.im) < arbitraryAcceptableDifference
+                num::abs(left.re - right.re) < arbitrary_acceptable_difference
+                && num::abs(left.im - right.im) < arbitrary_acceptable_difference
             })
     }
 }
@@ -113,7 +117,7 @@ fn main() {
     println!("Output FFT:\n {:.3?}", fft_output);
     println!("Output iDFT:\n {:.3?}", calculate_idft(&dft_output));
 
-    let equal_DFT_FFT = ComplexComparatorWrapper(&dft_output) == ComplexComparatorWrapper(&fft_output);
-    println!("\nIs (FFT==DFT) {}", equal_DFT_FFT);
-    assert!(equal_DFT_FFT, "computations from FFT and DFT are not equal");
+    let equal_dft_fft = eq_complex_vector(&dft_output, &fft_output);
+    println!("\nIs (FFT==DFT) {}", equal_dft_fft);
+    assert!(equal_dft_fft, "computations from FFT and DFT are not equal");
 }
