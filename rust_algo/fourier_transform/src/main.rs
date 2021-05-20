@@ -10,17 +10,6 @@ use std::env;
 type InputT = Vec<f64>;
 type OutputT = Vec<Complex<f64>>;
 
-// The sine and cosine waves are called DFT basic functions - they are waves with unity amplitude. The DFT basic functions have the following equations:
-// By eulers formula e^(i*theta) = cos(theta) + i * sin(theta)
-// ck[i] = cos(2pi * k * i/N)
-// sk[i] = sin(2pi * k * i/N)
-// x[i]  = sum(ck) + i * sum(sk)
-// Returns a complex number with magnitude r and phase angle theta.
-fn polar(theta: f64, n: usize) -> Complex<f64> {
-    let angle = -theta * std::f64::consts::PI / n as f64;
-    Complex::new(angle.cos(), angle.sin())
-}
-
 fn is_power_of_two(n : usize) -> bool {
     n != 0 && (n & (n-1) == 0)
 }
@@ -31,8 +20,21 @@ fn calculate_dft(input: &InputT) -> OutputT {
 
     for (k, elem) in output.iter_mut().enumerate() {
         for j in 0..input.len() {
-            *elem += polar((k*j) as f64, input.len()) * input[j] as f64;
+            *elem += polar(-1.0, -2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j] as f64;
         }
+    }
+    output
+}
+
+fn calculate_idft(input: &OutputT) -> OutputT {
+    let mut output: OutputT = Vec::new();
+    output.resize_with(input.len(), Default::default);
+
+    for (k, elem) in output.iter_mut().enumerate() {
+        for j in 0..input.len() {
+            *elem += polar(1.0, 2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j];
+        }
+        *elem = elem.unscale(input.len() as f64);
     }
     output
 }
@@ -46,6 +48,17 @@ fn calculate_fft(input: &InputT) -> OutputT {
         .collect::<OutputT>();
     _calculate_fft(&mut output);
     output
+}
+
+
+// The sine and cosine waves are called DFT basic functions - they are waves with unity amplitude. The DFT basic functions have the following equations:
+// By eulers formula e^(i*theta) = cos(theta) + i * sin(theta)
+// ck[i] = cos(2pi * k * i/N)
+// sk[i] = sin(2pi * k * i/N)
+// x[i]  = sum(ck) + i * sum(sk)
+// Returns a complex number with magnitude r and phase angle theta.
+fn polar(magnitude: f64, phase_angle: f64) -> Complex<f64> {
+    Complex::new(phase_angle.cos(), phase_angle.sin()).scale(magnitude)
 }
 
 // Cooley–Tukey FFT (in-place, divide-and-conquer)
@@ -65,11 +78,13 @@ fn _calculate_fft(input: &mut OutputT) {
     _calculate_fft(&mut even);
     _calculate_fft(&mut odd);
 
+    // TODO there is a bug here? the output doesn't match the calculations from DFT
     // combine
     for k in 0..n / 2 {
-        let t = polar(k as f64, n) * odd[k];
+        let t = polar(-1.0, -2.0 * k as f64 * std::f64::consts::PI / n as f64) * odd[k];
         input[k] = even[k] + t;
         input[k + n / 2] = even[k] - t;
+
     }
 }
 
@@ -89,9 +104,9 @@ struct ComplexComparatorWrapper<'a>(pub &'a OutputT);
 impl PartialEq for ComplexComparatorWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.0.len() == self.0.len()
-            && self.0.iter().zip(other.0.iter()).any(|(left, right)| {
-                !approx_eq!(f64, left.re, right.re, ulps = 2)
-                    || !approx_eq!(f64, left.im, right.im, ulps = 2)
+            && self.0.iter().zip(other.0.iter()).all(|(left, right)| {
+                approx_eq!(f64, left.re, right.re, ulps = 2)
+                    && approx_eq!(f64, left.im, right.im, ulps = 2)
             })
     }
 }
@@ -104,7 +119,9 @@ fn main() {
     let fft_output = calculate_fft(&input);
     println!("Output DFT:\n {:?}", dft_output);
     println!("Output FFT:\n {:?}", fft_output);
-    let equal = ComplexComparatorWrapper(&dft_output) == ComplexComparatorWrapper(&fft_output);
-    println!("\nIs (FFT==DFT) {}", equal);
-    assert!(equal, "computations from FFT and DFT are not equal");
+    println!("Output iDFT:\n {:?}", calculate_idft(&dft_output));
+
+    let equal_DFT_FFT = ComplexComparatorWrapper(&dft_output) == ComplexComparatorWrapper(&fft_output);
+    println!("\nIs (FFT==DFT) {}", equal_DFT_FFT);
+    assert!(equal_DFT_FFT, "computations from FFT and DFT are not equal");
 }
