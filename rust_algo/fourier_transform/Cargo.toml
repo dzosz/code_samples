@@ -1,8 +1,6 @@
 [package]
 name = "fourier_transform_by_hand"
-version = "0.1.0"    # the current version, obeying semver
-authors = ["B <b@example.com>"]
+version = "0.1.0"
 
 [dependencies]
-num = "0.4"
-float-cmp = "*"
+num = "*"

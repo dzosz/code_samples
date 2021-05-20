@@ -1,9 +1,5 @@
 extern crate num;
 
-extern crate float_cmp;
-
-use float_cmp::approx_eq;
-
 use num::Complex;
 use std::env;
 
@@ -20,7 +16,7 @@ fn calculate_dft(input: &InputT) -> OutputT {
 
     for (k, elem) in output.iter_mut().enumerate() {
         for j in 0..input.len() {
-            *elem += polar(-1.0, -2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j] as f64;
+            *elem += polar(1.0, -2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j] as f64;
         }
     }
     output
@@ -78,10 +74,9 @@ fn _calculate_fft(input: &mut OutputT) {
     _calculate_fft(&mut even);
     _calculate_fft(&mut odd);
 
-    // TODO there is a bug here? the output doesn't match the calculations from DFT
     // combine
     for k in 0..n / 2 {
-        let t = polar(-1.0, -2.0 * k as f64 * std::f64::consts::PI / n as f64) * odd[k];
+        let t = polar(1.0, -2.0 * k as f64 * std::f64::consts::PI / n as f64) * odd[k];
         input[k] = even[k] + t;
         input[k + n / 2] = even[k] - t;
 
@@ -97,16 +92,17 @@ fn get_optional_user_input() -> InputT {
             .map(|val| val.parse::<f64>().unwrap())
             .collect::<Vec<f64>>();
     }
-    return vec![1.0, 2.0, 3.0, 4.0];
+    return vec![1.0, 2.0, 3.0, 4.0]; // default
 }
 
 struct ComplexComparatorWrapper<'a>(pub &'a OutputT);
 impl PartialEq for ComplexComparatorWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
+        let arbitraryAcceptableDifference = 0.001;
         self.0.len() == self.0.len()
             && self.0.iter().zip(other.0.iter()).all(|(left, right)| {
-                approx_eq!(f64, left.re, right.re, ulps = 2)
-                    && approx_eq!(f64, left.im, right.im, ulps = 2)
+                num::abs(left.re - right.re) < arbitraryAcceptableDifference
+                && num::abs(left.im - right.im) < arbitraryAcceptableDifference
             })
     }
 }
@@ -117,9 +113,9 @@ fn main() {
     println!("Input: {:?}\n", input);
     let dft_output = calculate_dft(&input);
     let fft_output = calculate_fft(&input);
-    println!("Output DFT:\n {:?}", dft_output);
-    println!("Output FFT:\n {:?}", fft_output);
-    println!("Output iDFT:\n {:?}", calculate_idft(&dft_output));
+    println!("Output DFT:\n {:.3?}", dft_output);
+    println!("Output FFT:\n {:.3?}", fft_output);
+    println!("Output iDFT:\n {:.3?}", calculate_idft(&dft_output));
 
     let equal_DFT_FFT = ComplexComparatorWrapper(&dft_output) == ComplexComparatorWrapper(&fft_output);
     println!("\nIs (FFT==DFT) {}", equal_DFT_FFT);
