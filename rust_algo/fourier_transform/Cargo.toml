@@ -1,6 +1,21 @@
 [package]
-name = "fourier_transform_by_hand"
+name = "ft_by_hand"
+description = "simple implementation of fourier transform"
 version = "0.1.0"
+default-run = "test_ft"
+
+[lib]
+path = "src/ft_by_hand.rs"
+
+[[bin]]
+path = "src/main.rs"
+name = "test_ft"
+#test = true
+
+[[bin]]
+path = "src/blur_image.rs"
+name = "blur_image"
 
 [dependencies]
 num = "*"
+png = "*"
