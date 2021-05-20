@@ -3,27 +3,26 @@ extern crate num;
 use num::Complex;
 use std::env;
 
-type InputT = Vec<f64>;
-type OutputT = Vec<Complex<f64>>;
+type DataT = Vec<Complex<f64>>;
 
 fn is_power_of_two(n : usize) -> bool {
     n != 0 && (n & (n-1) == 0)
 }
 
-fn calculate_dft(input: &InputT) -> OutputT {
-    let mut output: OutputT = Vec::new();
+fn calculate_dft(input: &DataT) -> DataT {
+    let mut output: DataT = Vec::new();
     output.resize_with(input.len(), Default::default);
 
     for (k, elem) in output.iter_mut().enumerate() {
         for j in 0..input.len() {
-            *elem += polar(1.0, -2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j] as f64;
+            *elem += polar(1.0, -2.0 * (k*j) as f64 * std::f64::consts::PI / input.len() as f64) * input[j].re;
         }
     }
     output
 }
 
-fn calculate_idft(input: &OutputT) -> OutputT {
-    let mut output: OutputT = Vec::new();
+fn calculate_idft(input: &DataT) -> DataT {
+    let mut output: DataT = Vec::new();
     output.resize_with(input.len(), Default::default);
 
     for (k, elem) in output.iter_mut().enumerate() {
@@ -35,13 +34,10 @@ fn calculate_idft(input: &OutputT) -> OutputT {
     output
 }
 
-fn calculate_fft(input: &InputT) -> OutputT {
+fn calculate_fft(input: &DataT) -> DataT {
     assert!(is_power_of_two(input.len()), "this fft algorithm requires input size of power of 2");
+    let mut output = input.clone();
 
-    let mut output: OutputT = input
-        .iter()
-        .map(|val| Complex::new(*val, 0.0))
-        .collect::<OutputT>();
     _calculate_fft(&mut output);
     output
 }
@@ -60,14 +56,14 @@ fn polar(magnitude: f64, phase_angle: f64) -> Complex<f64> {
 // Cooley–Tukey FFT (in-place, divide-and-conquer)
 // Higher memory requirements and redundancy although more intuitive
 // adapted from c++ code from https://rosettacode.org/wiki/Fast_Fourier_transform
-fn _calculate_fft(input: &mut OutputT) {
+fn _calculate_fft(input: &mut DataT) {
     let n = input.len();
     if n <= 1 {
         return;
     }
 
     // divide
-    let mut even: OutputT = input.iter().step_by(2).copied().collect();
+    let mut even: DataT = input.iter().step_by(2).copied().collect();
     let mut odd = input.iter().skip(1).step_by(2).copied().collect();
 
     // conquer
@@ -83,19 +79,19 @@ fn _calculate_fft(input: &mut OutputT) {
     }
 }
 
-fn get_optional_user_input() -> InputT {
+fn get_optional_user_input() -> DataT {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 {
         return args
             .iter()
             .skip(1)
-            .map(|val| val.parse::<f64>().unwrap())
-            .collect::<Vec<f64>>();
+            .map(|val| Complex::new(val.parse::<f64>().unwrap(), 0.0))
+            .collect::<DataT>();
     }
-    return vec![1.0, 2.0, 3.0, 4.0]; // default
+    return vec![Complex{re:1.0,im:0.0}, Complex{re:2.0, im:0.0}, Complex{re:3.0, im:0.0}, Complex{re:4.0,im:0.0}]; // default
 }
 
-struct ComplexComparatorWrapper<'a>(pub &'a OutputT);
+struct ComplexComparatorWrapper<'a>(pub &'a DataT);
 impl PartialEq for ComplexComparatorWrapper<'_> {
     fn eq(&self, other: &Self) -> bool {
         let arbitraryAcceptableDifference = 0.001;
