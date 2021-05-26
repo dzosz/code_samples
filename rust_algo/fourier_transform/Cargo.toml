@@ -19,3 +19,4 @@ name = "blur_image"
 [dependencies]
 num = "*"
 png = "*"
+nalgebra = "*"
