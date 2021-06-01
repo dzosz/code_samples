@@ -6,28 +6,33 @@ use std::mem::MaybeUninit;
 
 //use std::ops::{Deref, DerefMut};
 
-type Counter = AtomicUsize; // borrwing not supported across threads?
+type Counter = AtomicUsize;
 
 use std::thread;
 
+#[repr(align(64))]
 struct SeqLock<T> {
-    item: T,
     iteration: Counter,
+    item: T,
 }
 
 struct SeqLockWriter<T> {
-    item: *mut T,
     iteration: *const Counter,
+    item: *mut T,
 }
 
-impl<T> SeqLockWriter<T> {
-    pub fn write(&self, val : T) {
+impl<T : Copy> SeqLockWriter<T> {
+    // single writer  only
+    pub fn write(&self, val: T) {
         unsafe {
-            assert!((*self.iteration).load(Ordering::SeqCst) % 2 == 0); // make sure no other writer started
+            assert!(
+                (*self.iteration).load(Ordering::Relaxed) % 2 == 0,
+                "single writer allowed"
+            );
 
-            (*self.iteration).fetch_add(1, Ordering::SeqCst);
-            *self.item = val;
-            (*self.iteration).fetch_add(1, Ordering::SeqCst);
+            (*self.iteration).fetch_add(1, Ordering::Relaxed); // relaxed because we don't care about previous stores
+            *self.item = val; // TODO some pople use 'std::ptr::write_volatile' here
+            (*self.iteration).fetch_add(1, Ordering::Release);
         }
     }
 }
@@ -40,16 +45,16 @@ impl<T> Drop for SeqLockWriter<T> {
 */
 
 struct SeqLockReader<T> {
-    item: *const T,
     iteration: *const Counter,
+    item: *const T,
 }
 
 impl<T: Copy> SeqLockReader<T> {
     pub fn read(&self) -> T {
         unsafe {
-            let mut val : MaybeUninit<T> = MaybeUninit::uninit();
+            let mut val: MaybeUninit<T> = MaybeUninit::uninit();
             while !self.try_read(&mut *val.as_mut_ptr()) {
-                // spin;
+                std::thread::yield_now();
             }
             *val.as_mut_ptr()
         }
@@ -57,9 +62,13 @@ impl<T: Copy> SeqLockReader<T> {
 
     pub fn try_read(&self, val: &mut T) -> bool {
         unsafe {
-            let prev = (&*self.iteration).load(Ordering::SeqCst);
-            *val = *self.item;
-            return prev == (&*self.iteration).load(Ordering::SeqCst);
+            let prev = (&*self.iteration).load(Ordering::Acquire);
+            if prev % 2 == 0 {
+                *val = *self.item; // TODO some people use 'std::ptr::read_volatile' here...
+                // relaxed because if the count didn't change then underlying buffer is the same as well
+                return prev == (&*self.iteration).load(Ordering::Relaxed);
+            }
+            return false;
         }
     }
 }
@@ -116,13 +125,14 @@ impl<T> DerefMut for SeqLock<T> {
 fn main() {
     let my_lock = Arc::new(SeqLock::<usize>::new(0));
 
-    
     let lock_ref1 = my_lock.clone();
     thread::spawn(move || {
         let reader = lock_ref1.get_reader();
         let value = reader.read();
         println!("value={}", value);
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
 
     // overwrite
     let lock_ref2 = my_lock.clone();
@@ -131,7 +141,9 @@ fn main() {
         writer.write(130);
         writer.write(150);
         println!("other thread wrote value");
-    }).join().unwrap();
+    })
+    .join()
+    .unwrap();
 
     // read again
     {
