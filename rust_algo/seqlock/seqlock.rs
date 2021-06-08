@@ -61,7 +61,7 @@ impl<'a, T: Copy> SeqLockWriter<'a, T> {
         self._end_write();
     }
 
-    pub fn write_with(&mut self, closure: fn(*mut T)) {
+    pub fn write_with(&mut self, closure: impl Fn(*mut T)) {
         self._start_write();
         closure(self.item.as_ptr());
         self._end_write();
@@ -114,29 +114,59 @@ impl<T: Copy> SeqLockReader<'_, T> {
     }
 }
 
-// FIXME can't return SeqLockReader/Writer here. also Generic Associated Types are not supported
-/*
-impl< T> Deref for SeqLock<T> {
-    type Target = SeqLockReader<T>;
-    fn deref(&self) -> &Self::Target {
-        &self
-        /*
-        SeqLockReader {
-            item: &self.item,
-            iteration: &self.iteration,
-        }*/
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn generate_numbers(start: u32, arr: &mut [u32]) {
+        for i in 0..arr.len() {
+            arr[i] = start + i as u32;
+        }
+    }
+
+    fn is_array_increasing(arr: &[u32]) {
+        for i in 1..arr.len() {
+            if arr[i] - 1 != arr[i - 1] {
+                panic!("idx {} not equal {:?} != {:?}", i, arr[i], arr[i - 1]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_single_consumer_one_cacheline() {
+        type Obj = [u32; 16];
+        let my_lock = Arc::new(SeqLock::<Obj>::new([0; 16]));
+
+        // initialize
+        let mut value : Obj = [0; 16];
+        {
+            generate_numbers(0, &mut value);
+            let mut writer = my_lock.get_writer();
+            writer.write(value.clone());
+        }
+
+        let lock_reader = my_lock.clone();
+        let reader_thread = thread::spawn(move || {
+            let reader = lock_reader.get_reader();
+            for _ in 0..100000000 {
+                let value = reader.read();
+                is_array_increasing(&value);
+            }
+        });
+
+        let lock_writer = my_lock.clone();
+        let writer_thread = thread::spawn(move || {
+            let mut writer = lock_writer.get_writer();
+            for i in 0..100000000 {
+                generate_numbers(i, &mut value);
+                writer.write_with(|item| unsafe { *item = value; });
+            }
+        });
+
+        reader_thread.join().unwrap();
+        writer_thread.join().unwrap();
     }
 }
-impl<T> DerefMut for SeqLock<T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self
-        /*
-        SeqLockWriter {
-            item: &mut self.item,
-            iteration: &self.iteration,
-        }*/
-    }
-}*/
 
 fn main() {
     let my_lock = Arc::new(SeqLock::<usize>::new(0));
@@ -154,7 +184,7 @@ fn main() {
     let lock_ref2 = my_lock.clone();
     thread::spawn(move || {
         let mut writer = lock_ref2.get_writer();
-        writer.write(150);
+        writer.write(115);
         writer.write_with(|item| unsafe {
             *item = 111;
         });
@@ -170,5 +200,3 @@ fn main() {
         println!("value={}", value);
     }
 }
-
-
