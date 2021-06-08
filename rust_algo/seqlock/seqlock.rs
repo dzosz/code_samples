@@ -134,17 +134,20 @@ pub mod seqlock {
             }
 
             fn generate_consecutive_numbers(&mut self, start: u64) {
-                for i in 0..self.data.len() {
-                    self.data[i] = start + i as u64;
-                }
+                let mut idx = 0;
+                self.data.iter_mut().for_each(|e| {
+                    *e = idx + start;
+                    idx += 1;
+                });
             }
 
             fn are_numbers_in_increasing_order(data: &[u64]) {
-                for i in 1..data.len() {
-                    if data[i] - 1 != data[i - 1] {
-                        panic!("idx {} not equal {:?} != {:?}", i, data[i], data[i - 1]);
+                data.iter().enumerate().skip(1).fold(data[0], |prev, (i, next)| {
+                    if prev + 1 != *next {
+                        panic!("idx={} not equal {:?} != {:?}", i, prev, *next);
                     }
-                }
+                    *next
+                });
             }
         }
 
@@ -153,18 +156,11 @@ pub mod seqlock {
             const ARRAY_SIZE: usize = 8;
 
             let mut data_writer = TestWriter::new(ARRAY_SIZE);
-            let my_lock = Arc::new(SeqLock::<[u64; ARRAY_SIZE]>::new(data_writer.data.clone().try_into().unwrap()));
+            let my_lock = Arc::new(SeqLock::<[u64; ARRAY_SIZE]>::new(
+                data_writer.data.clone().try_into().unwrap(),
+            ));
 
             let iterations = 100000000;
-
-            let lock_reader = my_lock.clone();
-            let reader_thread = thread::spawn(move || {
-                let reader = lock_reader.get_reader();
-                for _ in 0..iterations {
-                    let value = reader.read();
-                    TestWriter::are_numbers_in_increasing_order(&value);
-                }
-            });
 
             let lock_writer = my_lock.clone();
             let writer_thread = thread::spawn(move || {
@@ -176,7 +172,14 @@ pub mod seqlock {
                 }
             });
 
-            reader_thread.join().unwrap();
+            {
+                let reader = my_lock.get_reader();
+                for _ in 0..iterations {
+                    let value = reader.read();
+                    TestWriter::are_numbers_in_increasing_order(&value);
+                }
+            }
+
             writer_thread.join().unwrap();
         }
     }
