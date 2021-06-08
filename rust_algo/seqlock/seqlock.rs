@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use std::mem::MaybeUninit;
 
-use std::ptr::NonNull;
-
-use std::sync::atomic;
+// use std::ptr::NonNull;
 
 //use std::ops::{Deref, DerefMut};
 
@@ -14,51 +12,83 @@ type Counter = AtomicUsize;
 
 use std::thread;
 
-use std::cell::UnsafeCell;
+use std::cell::Cell;
 
 #[repr(align(64))]
 struct SeqLock<T> {
     iteration: Counter,
-    item: UnsafeCell<T>,
+    item: Cell<T>, // modified
 }
 
-struct SeqLockWriter<'a, T> {
-    iteration: NonNull<Counter>,
-    item: &'a UnsafeCell<T>,
-}
+// required to make Cell safe for multithreaded access
+unsafe impl<T> Send for SeqLock<T> {}
+unsafe impl<T> Sync for SeqLock<T> {}
 
-impl<T: Copy> SeqLockWriter<'_, T> {
-    // single writer  only
-    pub fn write(&mut self, val: T) {
-        unsafe {
-            assert!(
-                self.iteration.as_ref().load(Ordering::Relaxed) % 2 == 0,
-                "single writer allowed"
-            );
-
-            self.iteration.as_mut().fetch_add(1, Ordering::Release); // acquire not required because writer is single threaded.
-            // also acquire is available for read only, this is store
-
-            std::ptr::write(self.item.get(), val); // TODO some pople use 'std::ptr::write_volatile' here
-            self.iteration.as_mut().fetch_add(1, Ordering::Release);
+impl<T> SeqLock<T> {
+    pub fn new(val: T) -> SeqLock<T> {
+        SeqLock {
+            item: val.into(),
+            iteration: AtomicUsize::new(0),
         }
     }
 
-    pub fn get_ptr(&mut self) -> *mut T {
-        self.item.get() as *mut _
+    pub fn get_writer(&self) -> SeqLockWriter<T> {
+        SeqLockWriter {
+            item: &self.item,
+            iteration: &self.iteration,
+        }
+    }
+    pub fn get_reader(&self) -> SeqLockReader<T> {
+        SeqLockReader {
+            item: &self.item,
+            iteration: &self.iteration,
+        }
     }
 }
-/*
-impl<T> Drop for SeqLockWriter<T> {
-    fn drop(&mut self) {
-        println!("dropped");
+
+struct SeqLockWriter<'a, T> {
+    iteration: &'a Counter,
+    item: &'a Cell<T>,
+}
+
+impl<'a, T: Copy> SeqLockWriter<'a, T> {
+    // single writer  only
+    pub fn write(&mut self, val: T) {
+        self._start_write();
+        unsafe {
+            std::ptr::write(self.item.as_ptr(), val); // TODO some pople use 'std::ptr::write_volatile' here
+        }
+        self._end_write();
+    }
+
+    pub fn write_with(&mut self, closure: fn(*mut T)) {
+        self._start_write();
+        closure(self.item.as_ptr());
+        self._end_write();
+    }
+
+    fn _start_write(&mut self) {
+        assert!(
+            self.iteration.load(Ordering::Relaxed) % 2 == 0,
+            "single writer allowed"
+        );
+
+        self.iteration.fetch_add(1, Ordering::Release); // acquire not required because writer is single threaded.
+                                                        // also acquire is available for read only, this is store
+    }
+    fn _end_write(&mut self) {
+        assert!(
+            self.iteration.load(Ordering::Relaxed) % 2 == 1,
+            "single writer allowed"
+        );
+
+        self.iteration.fetch_add(1, Ordering::Release);
     }
 }
-*/
 
 struct SeqLockReader<'a, T> {
-    iteration: NonNull<Counter>,
-    item: &'a UnsafeCell<T>,
+    iteration: &'a Counter,
+    item: &'a Cell<T>,
 }
 
 impl<T: Copy> SeqLockReader<'_, T> {
@@ -73,41 +103,14 @@ impl<T: Copy> SeqLockReader<'_, T> {
     }
 
     pub fn try_read(&self, val: &mut T) -> bool {
-        unsafe {
-            let prev = self.iteration.as_ref().load(Ordering::Acquire);
-            if prev % 2 == 0 {
-                *val = *self.item.get(); // TODO some people use 'std::ptr::read_volatile' here...
-                                         // relaxed because if the count didn't change then underlying buffer is the same as well
-                return prev == self.iteration.as_ref().load(Ordering::Relaxed);
+        let prev = self.iteration.load(Ordering::Acquire);
+        if prev % 2 == 0 {
+            unsafe {
+                *val = *self.item.as_ptr(); // TODO some people use 'std::ptr::read_volatile' here...
             }
-            return false;
+            return prev == self.iteration.load(Ordering::Acquire);
         }
-    }
-}
-
-// required to make UnsafeCell safe for multithreaded access
-unsafe impl<T> Send for SeqLock<T> {}
-unsafe impl<T> Sync for SeqLock<T> {}
-
-impl<T> SeqLock<T> {
-    pub fn new(val: T) -> SeqLock<T> {
-        SeqLock {
-            item: val.into(),
-            iteration: AtomicUsize::new(0),
-        }
-    }
-
-    pub fn get_writer(&mut self) -> SeqLockWriter<T> {
-        SeqLockWriter {
-            item: &mut self.item,
-            iteration: NonNull::new(&self.iteration as *const _ as *mut _).unwrap(),
-        }
-    }
-    pub fn get_reader(&self) -> SeqLockReader<T> {
-        SeqLockReader {
-            item: &self.item,
-            iteration: NonNull::new(&self.iteration as *const _ as *mut _).unwrap(),
-        }
+        return false;
     }
 }
 
@@ -151,10 +154,10 @@ fn main() {
     let lock_ref2 = my_lock.clone();
     thread::spawn(move || {
         let mut writer = lock_ref2.get_writer();
-        writer.write(130);
         writer.write(150);
-        let my_ptr = writer.get_ptr();
-        let my_ptr2 = writer.get_ptr();
+        writer.write_with(|item| unsafe {
+            *item = 111;
+        });
         println!("other thread wrote value");
     })
     .join()
@@ -167,3 +170,5 @@ fn main() {
         println!("value={}", value);
     }
 }
+
+
