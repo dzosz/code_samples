@@ -21,7 +21,7 @@ pub mod seqlock {
     unsafe impl<T> Send for SeqLock<T> {}
     unsafe impl<T> Sync for SeqLock<T> {}
 
-    impl<T> SeqLock<T> {
+    impl<T: Copy> SeqLock<T> {
         pub fn new(val: T) -> SeqLock<T> {
             SeqLock {
                 item: val.into(),
@@ -30,10 +30,12 @@ pub mod seqlock {
         }
 
         pub fn get_writer(&self) -> SeqLockWriter<T> {
-            SeqLockWriter {
+            let obj = SeqLockWriter {
                 item: &self.item,
                 iteration: &self.iteration,
-            }
+            };
+            obj._start_write();
+            obj
         }
         pub fn get_reader(&self) -> SeqLockReader<T> {
             SeqLockReader {
@@ -43,28 +45,24 @@ pub mod seqlock {
         }
     }
 
-    pub struct SeqLockWriter<'a, T> {
+    pub struct SeqLockWriter<'a, T: Copy> {
         iteration: &'a Counter,
         item: &'a Cell<T>,
     }
 
     impl<T: Copy> SeqLockWriter<'_, T> {
-        // single writer  only
-        pub fn write(&mut self, val: T) {
-            self._start_write();
-            unsafe {
-                std::ptr::write(self.item.as_ptr(), val); // TODO some pople use 'std::ptr::write_volatile' here
-            }
-            self._end_write();
+        // consuming. single threaded
+        pub fn write(self, val: T) {
+            self.item.set(val);
+            //std::ptr::write(self.item.as_ptr(), val); // TODO some pople use 'std::ptr::write_volatile' here
         }
 
-        pub fn write_with(&mut self, closure: impl Fn(*mut T)) {
-            self._start_write();
+        // consuming.
+        pub fn write_with(self, closure: impl Fn(*mut T)) {
             closure(self.item.as_ptr());
-            self._end_write();
         }
 
-        fn _start_write(&mut self) {
+        fn _start_write(&self) {
             assert!(
                 self.iteration.load(Ordering::Relaxed) % 2 == 0,
                 "single writer allowed"
@@ -73,13 +71,20 @@ pub mod seqlock {
             self.iteration.fetch_add(1, Ordering::Release); // acquire not required because writer is single threaded.
                                                             // also acquire is available for read only, this is store
         }
-        fn _end_write(&mut self) {
+
+        fn _end_write(&self) {
             assert!(
                 self.iteration.load(Ordering::Relaxed) % 2 == 1,
                 "single writer allowed"
             );
 
             self.iteration.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    impl<T: Copy> Drop for SeqLockWriter<'_, T> {
+        fn drop(&mut self) {
+            self._end_write();
         }
     }
 
@@ -102,9 +107,8 @@ pub mod seqlock {
         pub fn try_read(&self, val: &mut T) -> bool {
             let prev = self.iteration.load(Ordering::Acquire);
             if prev % 2 == 0 {
-                unsafe {
-                    *val = *self.item.as_ptr(); // TODO some people use 'std::ptr::read_volatile' here...
-                }
+                *val = self.item.get();
+                //*val = *self.item.as_ptr(); // TODO some people use 'std::ptr::read_volatile' here...
                 return prev == self.iteration.load(Ordering::Acquire);
             }
             return false;
@@ -114,9 +118,9 @@ pub mod seqlock {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use std::convert::TryInto;
         use std::sync::Arc;
         use std::thread;
-        use std::convert::TryInto;
 
         struct TestWriter {
             data: Vec<u64>,
@@ -147,15 +151,9 @@ pub mod seqlock {
         #[test]
         fn test_single_consumer_one_cacheline() {
             const ARRAY_SIZE: usize = 8;
-            let mut data_writer = TestWriter::new(ARRAY_SIZE);
-            let my_lock = Arc::new(SeqLock::<[u64; ARRAY_SIZE]>::new([0; ARRAY_SIZE]));
 
-            // initialize
-            {
-                let mut writer = my_lock.get_writer();
-                let arr: [u64; ARRAY_SIZE] = data_writer.data.clone().try_into().unwrap();
-                writer.write(arr);
-            }
+            let mut data_writer = TestWriter::new(ARRAY_SIZE);
+            let my_lock = Arc::new(SeqLock::<[u64; ARRAY_SIZE]>::new(data_writer.data.clone().try_into().unwrap()));
 
             let iterations = 100000000;
 
@@ -170,10 +168,9 @@ pub mod seqlock {
 
             let lock_writer = my_lock.clone();
             let writer_thread = thread::spawn(move || {
-                let mut writer = lock_writer.get_writer();
                 for i in 0..iterations {
                     data_writer.generate_consecutive_numbers(i);
-                    writer.write_with(|item| unsafe {
+                    lock_writer.get_writer().write_with(|item| unsafe {
                         *item = data_writer.data.as_slice().try_into().unwrap();
                     });
                 }
