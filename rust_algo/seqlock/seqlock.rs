@@ -48,7 +48,7 @@ pub mod seqlock {
         item: &'a Cell<T>,
     }
 
-    impl<'a, T: Copy> SeqLockWriter<'a, T> {
+    impl<T: Copy> SeqLockWriter<'_, T> {
         // single writer  only
         pub fn write(&mut self, val: T) {
             self._start_write();
