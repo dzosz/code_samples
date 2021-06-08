@@ -4,36 +4,48 @@ use std::sync::Arc;
 
 use std::mem::MaybeUninit;
 
+use std::ptr::NonNull;
+
+use std::sync::atomic;
+
 //use std::ops::{Deref, DerefMut};
 
 type Counter = AtomicUsize;
 
 use std::thread;
 
+use std::cell::UnsafeCell;
+
 #[repr(align(64))]
 struct SeqLock<T> {
     iteration: Counter,
-    item: T,
+    item: UnsafeCell<T>,
 }
 
-struct SeqLockWriter<T> {
-    iteration: *const Counter,
-    item: *mut T,
+struct SeqLockWriter<'a, T> {
+    iteration: NonNull<Counter>,
+    item: &'a UnsafeCell<T>,
 }
 
-impl<T : Copy> SeqLockWriter<T> {
+impl<T: Copy> SeqLockWriter<'_, T> {
     // single writer  only
-    pub fn write(&self, val: T) {
+    pub fn write(&mut self, val: T) {
         unsafe {
             assert!(
-                (*self.iteration).load(Ordering::Relaxed) % 2 == 0,
+                self.iteration.as_ref().load(Ordering::Relaxed) % 2 == 0,
                 "single writer allowed"
             );
 
-            (*self.iteration).fetch_add(1, Ordering::Relaxed); // relaxed because we don't care about previous stores
-            *self.item = val; // TODO some pople use 'std::ptr::write_volatile' here
-            (*self.iteration).fetch_add(1, Ordering::Release);
+            self.iteration.as_mut().fetch_add(1, Ordering::Release); // acquire not required because writer is single threaded.
+            // also acquire is available for read only, this is store
+
+            std::ptr::write(self.item.get(), val); // TODO some pople use 'std::ptr::write_volatile' here
+            self.iteration.as_mut().fetch_add(1, Ordering::Release);
         }
+    }
+
+    pub fn get_ptr(&mut self) -> *mut T {
+        self.item.get() as *mut _
     }
 }
 /*
@@ -44,12 +56,12 @@ impl<T> Drop for SeqLockWriter<T> {
 }
 */
 
-struct SeqLockReader<T> {
-    iteration: *const Counter,
-    item: *const T,
+struct SeqLockReader<'a, T> {
+    iteration: NonNull<Counter>,
+    item: &'a UnsafeCell<T>,
 }
 
-impl<T: Copy> SeqLockReader<T> {
+impl<T: Copy> SeqLockReader<'_, T> {
     pub fn read(&self) -> T {
         unsafe {
             let mut val: MaybeUninit<T> = MaybeUninit::uninit();
@@ -62,38 +74,39 @@ impl<T: Copy> SeqLockReader<T> {
 
     pub fn try_read(&self, val: &mut T) -> bool {
         unsafe {
-            let prev = (&*self.iteration).load(Ordering::Acquire);
+            let prev = self.iteration.as_ref().load(Ordering::Acquire);
             if prev % 2 == 0 {
-                *val = *self.item; // TODO some people use 'std::ptr::read_volatile' here...
-                // relaxed because if the count didn't change then underlying buffer is the same as well
-                return prev == (&*self.iteration).load(Ordering::Relaxed);
+                *val = *self.item.get(); // TODO some people use 'std::ptr::read_volatile' here...
+                                         // relaxed because if the count didn't change then underlying buffer is the same as well
+                return prev == self.iteration.as_ref().load(Ordering::Relaxed);
             }
             return false;
         }
     }
 }
 
-//unsafe impl<T> Send for SeqLock<T> {}
-//unsafe impl<T> Sync for SeqLock<T> {}
+// required to make UnsafeCell safe for multithreaded access
+unsafe impl<T> Send for SeqLock<T> {}
+unsafe impl<T> Sync for SeqLock<T> {}
 
 impl<T> SeqLock<T> {
     pub fn new(val: T) -> SeqLock<T> {
         SeqLock {
-            item: val,
+            item: val.into(),
             iteration: AtomicUsize::new(0),
         }
     }
 
-    pub fn get_writer(&self) -> SeqLockWriter<T> {
+    pub fn get_writer(&mut self) -> SeqLockWriter<T> {
         SeqLockWriter {
-            item: &self.item as *const T as *mut T, // TODO undefined behavior const cast
-            iteration: &self.iteration,
+            item: &mut self.item,
+            iteration: NonNull::new(&self.iteration as *const _ as *mut _).unwrap(),
         }
     }
     pub fn get_reader(&self) -> SeqLockReader<T> {
         SeqLockReader {
             item: &self.item,
-            iteration: &self.iteration,
+            iteration: NonNull::new(&self.iteration as *const _ as *mut _).unwrap(),
         }
     }
 }
@@ -137,9 +150,11 @@ fn main() {
     // overwrite
     let lock_ref2 = my_lock.clone();
     thread::spawn(move || {
-        let writer = lock_ref2.get_writer();
+        let mut writer = lock_ref2.get_writer();
         writer.write(130);
         writer.write(150);
+        let my_ptr = writer.get_ptr();
+        let my_ptr2 = writer.get_ptr();
         println!("other thread wrote value");
     })
     .join()
