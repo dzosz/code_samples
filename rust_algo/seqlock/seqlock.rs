@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+pub mod seqlock {
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::mem::MaybeUninit;
 
@@ -10,12 +10,10 @@ use std::mem::MaybeUninit;
 
 type Counter = AtomicUsize;
 
-use std::thread;
-
 use std::cell::Cell;
 
 #[repr(align(64))]
-struct SeqLock<T> {
+pub struct SeqLock<T> {
     iteration: Counter,
     item: Cell<T>, // modified
 }
@@ -46,7 +44,7 @@ impl<T> SeqLock<T> {
     }
 }
 
-struct SeqLockWriter<'a, T> {
+pub struct SeqLockWriter<'a, T> {
     iteration: &'a Counter,
     item: &'a Cell<T>,
 }
@@ -86,7 +84,7 @@ impl<'a, T: Copy> SeqLockWriter<'a, T> {
     }
 }
 
-struct SeqLockReader<'a, T> {
+pub struct SeqLockReader<'a, T> {
     iteration: &'a Counter,
     item: &'a Cell<T>,
 }
@@ -116,15 +114,17 @@ impl<T: Copy> SeqLockReader<'_, T> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::thread;
     use super::*;
 
-    fn generate_numbers(start: u32, arr: &mut [u32]) {
+    fn generate_numbers(start: u64, arr: &mut [u64]) {
         for i in 0..arr.len() {
-            arr[i] = start + i as u32;
+            arr[i] = start + i as u64;
         }
     }
 
-    fn is_array_increasing(arr: &[u32]) {
+    fn is_array_increasing(arr: &[u64]) {
         for i in 1..arr.len() {
             if arr[i] - 1 != arr[i - 1] {
                 panic!("idx {} not equal {:?} != {:?}", i, arr[i], arr[i - 1]);
@@ -134,21 +134,23 @@ mod tests {
 
     #[test]
     fn test_single_consumer_one_cacheline() {
-        type Obj = [u32; 16];
-        let my_lock = Arc::new(SeqLock::<Obj>::new([0; 16]));
+        type Obj = [u64; 8];
+        let my_lock = Arc::new(SeqLock::<Obj>::new([0; 8]));
 
         // initialize
-        let mut value : Obj = [0; 16];
+        let mut value : Obj = [0; 8];
         {
             generate_numbers(0, &mut value);
             let mut writer = my_lock.get_writer();
             writer.write(value.clone());
         }
 
+        let iterations = 100000000;
+
         let lock_reader = my_lock.clone();
         let reader_thread = thread::spawn(move || {
             let reader = lock_reader.get_reader();
-            for _ in 0..100000000 {
+            for _ in 0..iterations {
                 let value = reader.read();
                 is_array_increasing(&value);
             }
@@ -157,7 +159,7 @@ mod tests {
         let lock_writer = my_lock.clone();
         let writer_thread = thread::spawn(move || {
             let mut writer = lock_writer.get_writer();
-            for i in 0..100000000 {
+            for i in 0..iterations {
                 generate_numbers(i, &mut value);
                 writer.write_with(|item| unsafe { *item = value; });
             }
@@ -168,35 +170,4 @@ mod tests {
     }
 }
 
-fn main() {
-    let my_lock = Arc::new(SeqLock::<usize>::new(0));
-
-    let lock_ref1 = my_lock.clone();
-    thread::spawn(move || {
-        let reader = lock_ref1.get_reader();
-        let value = reader.read();
-        println!("value={}", value);
-    })
-    .join()
-    .unwrap();
-
-    // overwrite
-    let lock_ref2 = my_lock.clone();
-    thread::spawn(move || {
-        let mut writer = lock_ref2.get_writer();
-        writer.write(115);
-        writer.write_with(|item| unsafe {
-            *item = 111;
-        });
-        println!("other thread wrote value");
-    })
-    .join()
-    .unwrap();
-
-    // read again
-    {
-        let reader = my_lock.get_reader();
-        let value = reader.read();
-        println!("value={}", value);
-    }
-}
+} // mod seqlock
