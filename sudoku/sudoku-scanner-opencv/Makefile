@@ -10,9 +10,9 @@ externals/jna-5.5.0.jar:
 	@mkdir -p externals
 	wget http://repo1.maven.org/maven2/net/java/dev/jna/jna/5.5.0/jna-5.5.0.jar -O externals/jna-5.5.0.jar
 
-externals/libsolver.so:
+externals/libsolver.so: ../sudoku_solver/libsolver.so
 	@mkdir -p externals
-	cd externals; wget http://192.168.0.164/tomek/testowy/-/jobs/artifacts/master/download?job=build_job -O tmp.zip; unzip -j tmp.zip; rm tmp.zip
+	@cp ../sudoku_solver/libsolver.so externals/
 	
 externals: externals/jna-5.5.0.jar externals/libsolver.so
 	
