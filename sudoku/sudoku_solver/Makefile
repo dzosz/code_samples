@@ -7,8 +7,8 @@ unsolvable_test_cases := $(wildcard test_cases/unsolvable*)
 
 all : libsolver.so test_solver
 
-libsolver.so : solver.h solver.cpp
-	g++ -shared solver.cpp -o $@ $(CXXFLAGS) ${LDFLAGS}
+libsolver.so : solver.h solver.cpp libminisat.a
+	g++ -shared solver.cpp -o $@ -lminisat $(CXXFLAGS) ${LDFLAGS}
 
 test_solver : libsolver.so  test_solver.cpp
 	g++ test_solver.cpp -o $@ -L. -lsolver $(CXXFLAGS) $(LDFLAGS)
@@ -32,3 +32,8 @@ $(unsolvable_test_cases): test_solver
 		@echo $@
 		@! ./test_solver $$(cat ./$@);
 		@echo;
+
+externals : libminisat.a
+	mkdir externals && cd externals && git clone --depth=1 --branch=master git@github.com:dzosz/minisat.git && cd minisat \
+		mkdir build && cd build && cmake .. && make
+	cp externals/minisat/build/libminisat.a .
