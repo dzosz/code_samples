@@ -33,7 +33,8 @@ $(unsolvable_test_cases): test_solver
 		@! ./test_solver $$(cat ./$@);
 		@echo;
 
-externals : libminisat.a
+externals libminisat.a:
 	mkdir externals && cd externals && git clone --depth=1 --branch=master git@github.com:dzosz/minisat.git && cd minisat \
 		mkdir build && cd build && cmake .. && make
 	cp externals/minisat/build/libminisat.a .
+	cp externals/minisat/minisat . -r
