@@ -161,6 +161,7 @@ bool Grid::isValidSquare(int pos) const
 }
 
 // MINISAT SOLVER
+// most of the code copied from https://github.com/horenmar/sudoku-example/blob/master/solver.cpp
 const int rows = ROOT;
 const int columns = ROOT;
 const int values = ROOT;
