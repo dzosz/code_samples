@@ -97,18 +97,31 @@ pub mod seqlock {
         pub fn read(&self) -> T {
             unsafe {
                 let mut val: MaybeUninit<T> = MaybeUninit::uninit();
-                while !self.try_read(&mut *val.as_mut_ptr()) {
+                while !self._try_read(val.as_mut_ptr()) {
                     std::thread::yield_now();
                 }
                 *val.as_mut_ptr()
             }
         }
 
-        pub fn try_read(&self, val: &mut T) -> bool {
+        pub fn try_read(&self, val: &mut Option<&mut T>) {
+            let mut buff: MaybeUninit<T> = MaybeUninit::uninit();
+            unsafe {
+                let my_ref = val.get_or_insert(&mut *buff.as_mut_ptr()); // workaround to get ref to optional cheaply
+                let success = self._try_read(*my_ref);
+                if !success {
+                    *val = None;
+                }
+            }
+        }
+
+        fn _try_read(&self, val: *mut T) -> bool {
             let prev = self.iteration.load(Ordering::Acquire);
             if prev % 2 == 0 {
-                *val = self.item.get();
-                //*val = *self.item.as_ptr(); // TODO some people use 'std::ptr::read_volatile' here...
+                unsafe {
+                    *val = self.item.get();
+                }
+                //*val = *self.item.as_ptr(); // TODO might want to use 'std::ptr::read_volatile' here...
                 return prev == self.iteration.load(Ordering::Acquire);
             }
             return false;
@@ -177,6 +190,43 @@ pub mod seqlock {
                 for _ in 0..iterations {
                     let value = reader.read();
                     TestWriter::are_numbers_in_increasing_order(&value);
+                }
+            }
+
+            writer_thread.join().unwrap();
+        }
+
+        #[test]
+        fn test_single_consumer_one_cacheline_try() {
+            const ARRAY_SIZE: usize = 8;
+
+            let mut data_writer = TestWriter::new(ARRAY_SIZE);
+            let my_lock = Arc::new(SeqLock::<[u64; ARRAY_SIZE]>::new(
+                data_writer.data.clone().try_into().unwrap(),
+            ));
+
+            let iterations = 100000000;
+
+            let lock_writer = my_lock.clone();
+            let writer_thread = thread::spawn(move || {
+                for i in 0..iterations {
+                    data_writer.generate_consecutive_numbers(i);
+                    lock_writer.get_writer().write_with(|item| unsafe {
+                        *item = data_writer.data.as_slice().try_into().unwrap();
+                    });
+                }
+            });
+
+            {
+                let mut my_optional = Default::default();
+                let reader = my_lock.get_reader();
+                for _ in 0..iterations {
+                    reader.try_read(&mut my_optional);
+                    match my_optional {
+                        Some(ref value) => {TestWriter::are_numbers_in_increasing_order(*value); },
+                        _ => {},
+                    }
+
                 }
             }
 
