@@ -1,6 +1,6 @@
 pub mod seqlock {
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering, fence};
 
     use std::mem::MaybeUninit;
 
@@ -62,18 +62,22 @@ pub mod seqlock {
             closure(self.item.as_ptr());
         }
 
+        /* A release operation only needs to prevent preceding memory operations from being reordered past itself,
+         * but a release fence must prevent preceding memory operations from being reordered past all subsequent writes
+         */
         fn _start_write(&self) {
-            assert!(
+            debug_assert!(
                 self.iteration.load(Ordering::Relaxed) % 2 == 0,
                 "single writer allowed"
             );
 
-            self.iteration.fetch_add(1, Ordering::Release); // acquire not required because writer is single threaded.
-                                                            // also acquire is available for read only, this is store
+            self.iteration.fetch_add(1, Ordering::Relaxed); // acquire not required because writer is single threaded.
+                                                            // also acquire is available for read only
+            fence(Ordering::Release);
         }
 
         fn _end_write(&self) {
-            assert!(
+            debug_assert!(
                 self.iteration.load(Ordering::Relaxed) % 2 == 1,
                 "single writer allowed"
             );
@@ -98,13 +102,32 @@ pub mod seqlock {
             unsafe {
                 let mut val: MaybeUninit<T> = MaybeUninit::uninit();
                 while !self._try_read(val.as_mut_ptr()) {
-                    std::thread::yield_now();
+                    // std::thread::yield_now();
                 }
                 *val.as_mut_ptr()
             }
         }
 
-        pub fn try_read(&self, val: &mut Option<&mut T>) {
+        pub fn read_into(&self, val : &mut T) {
+			while !self._try_read(val as *mut _) {
+				//std::thread::yield_now();
+			}
+        }
+
+        /*
+        pub fn try_read(&self) -> Option<T> {
+            let val = Default::default();
+            unsafe {
+                let my_ref = val.get_or_insert(&mut *buff.as_mut_ptr()); // workaround to get ref to optional cheaply
+                let success = self._try_read(*my_ref);
+                if !success {
+                    *val = None;
+                }
+            }
+        }
+        */
+
+        pub fn try_read_into(&self, val: &mut Option<&mut T>) {
             let mut buff: MaybeUninit<T> = MaybeUninit::uninit();
             unsafe {
                 let my_ref = val.get_or_insert(&mut *buff.as_mut_ptr()); // workaround to get ref to optional cheaply
@@ -122,7 +145,8 @@ pub mod seqlock {
                     *val = self.item.get();
                 }
                 //*val = *self.item.as_ptr(); // TODO might want to use 'std::ptr::read_volatile' here...
-                return prev == self.iteration.load(Ordering::Acquire);
+                fence(Ordering::Acquire);
+                return prev == self.iteration.load(Ordering::Relaxed);
             }
             return false;
         }
@@ -221,7 +245,7 @@ pub mod seqlock {
                 let mut my_optional = Default::default();
                 let reader = my_lock.get_reader();
                 for _ in 0..iterations {
-                    reader.try_read(&mut my_optional);
+                    reader.try_read_into(&mut my_optional);
                     match my_optional {
                         Some(ref value) => {TestWriter::are_numbers_in_increasing_order(*value); },
                         _ => {},
