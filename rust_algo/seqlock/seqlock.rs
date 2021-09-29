@@ -102,7 +102,7 @@ pub mod seqlock {
             unsafe {
                 let mut val: MaybeUninit<T> = MaybeUninit::uninit();
                 while !self._try_read(val.as_mut_ptr()) {
-                    // std::thread::yield_now();
+                    std::thread::yield_now();
                 }
                 *val.as_mut_ptr()
             }
@@ -110,31 +110,27 @@ pub mod seqlock {
 
         pub fn read_into(&self, val : &mut T) {
 			while !self._try_read(val as *mut _) {
-				//std::thread::yield_now();
+				std::thread::yield_now();
 			}
         }
 
-        /*
         pub fn try_read(&self) -> Option<T> {
-            let val = Default::default();
-            unsafe {
-                let my_ref = val.get_or_insert(&mut *buff.as_mut_ptr()); // workaround to get ref to optional cheaply
-                let success = self._try_read(*my_ref);
-                if !success {
-                    *val = None;
-                }
-            }
+            let mut val : Option<T> = None;
+            self.try_read_into(&mut val);
+            val
         }
-        */
 
-        pub fn try_read_into(&self, val: &mut Option<&mut T>) {
-            let mut buff: MaybeUninit<T> = MaybeUninit::uninit();
+        pub fn try_read_into(&self, val: &mut Option<T>) {
             unsafe {
-                let my_ref = val.get_or_insert(&mut *buff.as_mut_ptr()); // workaround to get ref to optional cheaply
-                let success = self._try_read(*my_ref);
+                //let my_ref = val.get_or_insert(Default::default());
+                let mut data: MaybeUninit<T> = MaybeUninit::uninit();
+                let success = self._try_read(data.as_mut_ptr());
                 if !success {
                     *val = None;
+                } else {
+                    *val = Some(*data.as_mut_ptr());
                 }
+
             }
         }
 
@@ -247,7 +243,7 @@ pub mod seqlock {
                 for _ in 0..iterations {
                     reader.try_read_into(&mut my_optional);
                     match my_optional {
-                        Some(ref value) => {TestWriter::are_numbers_in_increasing_order(*value); },
+                        Some(ref value) => {TestWriter::are_numbers_in_increasing_order(value); },
                         _ => {},
                     }
 
@@ -257,4 +253,38 @@ pub mod seqlock {
             writer_thread.join().unwrap();
         }
     }
+
+// type DATA = [u64; 10];
+type DATA = f64;
+
+pub fn read(reader : &mut SeqLockReader<DATA>) -> DATA {
+    reader.read()
+}
+
+pub fn read_into(reader : &mut SeqLockReader<DATA>, obj :&mut DATA) {
+    reader.read_into(obj);
+}
+
+pub fn try_read(reader : &mut SeqLockReader<DATA>) -> DATA {
+    loop {
+        let obj = reader.try_read();
+        match obj {
+            Some(data) => return data,
+            None => std::thread::yield_now(),
+        }
+        
+    }
+}
+pub fn try_read_into(reader : &mut SeqLockReader<DATA>, obj :&mut Option<DATA>) {
+    loop {
+        reader.try_read_into(obj);
+        match obj {
+            Some(data) => return ,
+            None => std::thread::yield_now(),
+        }
+    }
+}
+
 } // mod seqlock
+
+
