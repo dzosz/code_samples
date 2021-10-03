@@ -18,6 +18,7 @@ Packet get_example_packet() {
     p.sport = 130;
     p.dport = 60;
     p._14_proto = 16;
+    p.payload[0] = -1;
     return p;
 }
 TEST_CASE( "24 subnet source", "[Rule]" ) {
@@ -36,7 +37,7 @@ TEST_CASE( "24 subnet source", "[Rule]" ) {
     p.src = ip_to_num("192.193.193.0"); // different
     CHECK( ! f.process(p) );
 }
-TEST_CASE( "empty ", "[Rule]" ) {
+TEST_CASE( "empty rule ", "[Rule]" ) {
     std::vector<Rule> rules;
     Rule r;
     rules.push_back(r);
@@ -44,6 +45,62 @@ TEST_CASE( "empty ", "[Rule]" ) {
     Filter f(rules);
 
     auto p = get_example_packet();
+    CHECK( f.process(p) );
+}
+
+TEST_CASE( " matching ports ", "[Rule]" ) {
+    std::vector<Rule> rules;
+    Rule r;
+    r.sport = 100;
+    r.dport = 100;
+    rules.push_back(r);
+
+    Filter f(rules);
+
+    auto p = get_example_packet();
+    p.dport = 100;
+    p.sport = 100;
+    CHECK( f.process(p) );
+}
+
+TEST_CASE( " mismatching ports ", "[Rule]" ) {
+    std::vector<Rule> rules;
+    Rule r;
+    r.sport = 100;
+    r.dport = 100;
+    rules.push_back(r);
+
+    Filter f(rules);
+
+    auto p = get_example_packet();
+    p.dport = 99;
+    p.sport = 100;
+    CHECK( ! f.process(p) );
+}
+
+TEST_CASE( " mismatching protocol ", "[Rule]" ) {
+    std::vector<Rule> rules;
+    Rule r;
+    r._14_proto = 30;
+    rules.push_back(r);
+
+    Filter f(rules);
+
+    auto p = get_example_packet();
+    p._14_proto = 31;
+    CHECK( ! f.process(p) );
+}
+
+TEST_CASE( " matching protocol ", "[Rule]" ) {
+    std::vector<Rule> rules;
+    Rule r;
+    r._14_proto = 30;
+    rules.push_back(r);
+
+    Filter f(rules);
+
+    auto p = get_example_packet();
+    p._14_proto = 30;
     CHECK( f.process(p) );
 }
 
