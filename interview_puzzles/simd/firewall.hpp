@@ -88,15 +88,15 @@ struct __attribute__ ((__packed__,aligned(16))) CompressedRule {
 };
 
 bool CompressedRule::matchesSimd(const Packet& p) const {
-    DataVec pack2;
-    memcpy(&pack2, &p, sizeof(DataVec)); // packet is unaligned, so copy
+    DataVec packet_aligned;
+    memcpy(&packet_aligned, &p, sizeof(DataVec)); // packet is unaligned, so copy
     const DataVec* rule2 = reinterpret_cast<const DataVec*>(this);
-    const DataVec masked = pack2 & *rule2;
+    const DataVec allowed = packet_aligned & *rule2;
     
-    pack2[0] = src; // TODO if we could somehow get rid of this
-    pack2[1] = dst;
+    packet_aligned[0] = src; // TODO if we could somehow get rid of this
+    packet_aligned[1] = dst;
 
-    const DataVec diff = pack2 ^ masked; 
+    const DataVec diff = packet_aligned ^ allowed; 
     return diff[0] == 0 && diff[1] == 0 && diff[2] == 0 && ((diff[3] >> 24) == 0); // last index contains some of the paylod so we need to shift
 }
 
@@ -125,7 +125,7 @@ bool Filter::process(const Packet& packet) const {
 }
 bool Filter::processVectorized(const Packet& p) const {
     size_t i = 0;
-    // loop unrolling 
+    // loop unrolling, this might not be helping that much in current state because ::matchesSimd() is still not small enough
     for (i =0; i+4 < this->num_rules ; i+=4) {
         if (rules[i].matchesSimd(p)) {
             return true;
