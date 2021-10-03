@@ -251,15 +251,6 @@ std::vector<Packet> generate_random_packets(size_t num_packets) {
 }
 
 
-TEST_CASE( "bench_warmup_ignore ") {
-    BENCHMARK_ADVANCED("advanced") (Catch::Benchmark::Chronometer meter) {
-        auto rules = generate_random_rules();
-        size_t max_packets = meter.runs();
-        auto packets = generate_random_packets(max_packets);
-        Filter f(rules);
-        meter.measure([&packets, &f, max_packets](size_t i) { return f.processSequential(packets[i]); });
-    };
-}
 TEST_CASE( "bench_fast") {
     BENCHMARK_ADVANCED("advanced") (Catch::Benchmark::Chronometer meter) {
         auto rules = generate_random_rules();
@@ -269,6 +260,7 @@ TEST_CASE( "bench_fast") {
         meter.measure([&packets, &f, max_packets](size_t i) { return f.process(packets[i]); });
     };
 }
+/*
 TEST_CASE( "bench_slow") {
     BENCHMARK_ADVANCED("advanced") (Catch::Benchmark::Chronometer meter) {
         auto rules = generate_random_rules();
@@ -278,3 +270,4 @@ TEST_CASE( "bench_slow") {
         meter.measure([&packets, &f, max_packets](size_t i) { return f.processSequential(packets[i]); });
     };
 }
+*/
