@@ -1,6 +1,5 @@
 #define CATCH_CONFIG_MAIN
 #define CATCH_CONFIG_ENABLE_BENCHMARKING
-//#include "catch2_static/include/catch_with_main.hpp"
 #include "catch2/catch.hpp"
 #include "firewall.hpp"
 
@@ -8,7 +7,7 @@
 #include <random>
 
 uint32_t ip_to_num(const char* ip) {
-    return inet_addr(ip); // outputs network order - bigendian | TODO this function doesn't handle errors well (-1=255.255.255.255)
+    return inet_addr(ip);
 }
 
 Packet get_example_packet() {
@@ -19,6 +18,7 @@ Packet get_example_packet() {
     p.dport = 60;
     p._14_proto = 16;
     p.payload[0] = -1;
+    p.payload[1] = -1;
     return p;
 }
 TEST_CASE( "24 subnet source", "[Rule]" ) {
@@ -37,6 +37,7 @@ TEST_CASE( "24 subnet source", "[Rule]" ) {
     p.src = ip_to_num("192.193.193.0"); // different
     CHECK( ! f.process(p) );
 }
+
 TEST_CASE( "empty rule ", "[Rule]" ) {
     std::vector<Rule> rules;
     Rule r;
@@ -211,9 +212,8 @@ TEST_CASE( "31 subnet destination", "[Rule]" ) {
     REQUIRE( ! f.process(p) );
 }
 
-const static int SEED_FOR_TESTS=0;
+const static int SEED_FOR_TESTS=0; // 0 to make test runs consistent
 static std::default_random_engine eng(SEED_FOR_TESTS);
-
 static std::uniform_int_distribution<uint32_t> dist(0, std::numeric_limits<uint32_t>::max());
 
 std::vector<Rule> generate_random_rules() {
@@ -235,9 +235,9 @@ std::vector<Rule> generate_random_rules() {
 
 std::vector<Packet> generate_random_packets(size_t num_packets) {
     std::vector<Packet> packets;
-    
-    //auto r = rand() % 2;
-    for (size_t i =0; i < num_packets; ++i ) {
+
+    for (size_t i = 0; i < num_packets; ++i)
+    {
         Packet r;
         r.dst = (uint32_t)rand();
         r.src = (uint32_t)rand();
@@ -257,7 +257,7 @@ TEST_CASE( "bench_warmup_ignore ") {
         size_t max_packets = meter.runs();
         auto packets = generate_random_packets(max_packets);
         Filter f(rules);
-        meter.measure([&packets, &f, max_packets](size_t i) { return f.processSlow(packets[i]); });
+        meter.measure([&packets, &f, max_packets](size_t i) { return f.processSequential(packets[i]); });
     };
 }
 TEST_CASE( "bench_fast") {
@@ -266,7 +266,7 @@ TEST_CASE( "bench_fast") {
         size_t max_packets = meter.runs();
         auto packets = generate_random_packets(max_packets);
         Filter f(rules);
-        meter.measure([&packets, &f, max_packets](size_t i) { return f.processFast(packets[i]); });
+        meter.measure([&packets, &f, max_packets](size_t i) { return f.process(packets[i]); });
     };
 }
 TEST_CASE( "bench_slow") {
@@ -275,6 +275,6 @@ TEST_CASE( "bench_slow") {
         size_t max_packets = meter.runs();
         auto packets = generate_random_packets(max_packets);
         Filter f(rules);
-        meter.measure([&packets, &f, max_packets](size_t i) { return f.processSlow(packets[i]); });
+        meter.measure([&packets, &f, max_packets](size_t i) { return f.processSequential(packets[i]); });
     };
 }
