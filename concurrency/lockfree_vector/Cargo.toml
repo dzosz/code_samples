@@ -1,4 +1,8 @@
 cargo-features = ["edition2021"]
+[features]
+nightly = []
+default = ["nightly"]
+
 [package]
 name = "lockfree_vector"
 version = "0.1.0"
@@ -10,3 +14,12 @@ path = "src/lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+
+[profile.dev]
+opt-level = 3
+
+[profile.test]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
