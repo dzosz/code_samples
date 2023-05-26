@@ -1,17 +1,30 @@
 #![feature(vec_into_raw_parts)]
 #![feature(associated_type_defaults)]
 #![feature(atomic_from_ptr, atomic_from_mut, pointer_is_aligned)]
+#![feature(test)]
+
+mod bench;
+
 pub mod lockfree_vec {
 
-    const FIRST_BUCKET_SIZE : usize = 8;
+    macro_rules! debug {
+    ($($e:expr),+) => {
+        {
+            #[cfg(debug_assertions)]
+            {
+                dbg!($($e),+)
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                ($($e),+)
+            }
+        }
+    };
+    }
 
-    use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering, fence};
+    const FIRST_BUCKET_SIZE : usize = 8; // must be mutliple of 2
 
-    use std::mem::MaybeUninit;
-
-    use std::cell::Cell;
-    use std::marker::PhantomData;
-    use std::cmp;
+    use std::sync::atomic::{AtomicUsize, AtomicPtr, Ordering};
 
     // use std::ptr::NonNull;
     //use std::ops::{Deref, DerefMut};
@@ -20,7 +33,6 @@ pub mod lockfree_vec {
     type DataT   = usize; // TODO should be generic over vector
 
     fn highest_bit_index(num : usize) -> usize {
-        //1 << (usize::BITS - num.leading_zeros()) >> 1;
         //((1 << (usize::BITS - num.leading_zeros()) >> 1) as usize).trailing_zeros() as usize
         ((usize::BITS - num.leading_zeros()) - 1) as usize // 0 unsupported
     }
@@ -59,7 +71,6 @@ pub mod lockfree_vec {
         }
     }
 
-
     /*
     trait MyAtomItem<T : From<usize>> {
         type AtomicT = AtomicUsize;
@@ -72,21 +83,45 @@ pub mod lockfree_vec {
     // impl AtomicVecItem for AtomicUsize {}
     // struct Atomic<T: Atomize>(T::Atom);
 
-    // #[repr(align(64))]
+    /* TODO
+       Initializing arrays requires Copy trait which is not implemented for AtomicPtr. This doesn't matter as long as pointers and data is accessed in atomic way (using AtomicPtr structure in this implementation).
+    */
+    /* TODO
+     * make LockFreeVec generic over DataT
+     */
+
+    #[repr(align(64))]
     pub struct LockfreeVec {
         descriptor: AtomicPtr<Descriptor>,
         memory: [*mut * mut usize; 64], // pointer to buckets, TODO generic!
         //field : PhantomData<T>,
     }
 
-    // required to make Cell safe for multithreaded access
+    // make safe for multithreaded access
     unsafe impl Send for LockfreeVec {}
     unsafe impl Sync for LockfreeVec {}
 
+    impl Drop for LockfreeVec {
+        fn drop(&mut self) {
+            unsafe {
+                drop(Box::from_raw(self.descriptor.load(Ordering::SeqCst)));
+                for bucket in 0..self.memory.len() {
+                    let bucket_ptr = self.get_bucket(bucket).load(Ordering::SeqCst);
+                    if bucket_ptr.is_null() {
+                        break; // next buckets are guaranteed to be free
+                    }
+                    let bucket_size = 1 << (highest_bit_index(FIRST_BUCKET_SIZE) + bucket);
+                    drop(Vec::from_raw_parts(bucket_ptr, bucket_size, bucket_size));
+                }
+            }
+        }
+    }
+
     impl LockfreeVec
-        // where T: Copy + From<usize>
     {
         pub fn new() -> LockfreeVec {
+            assert_eq!(FIRST_BUCKET_SIZE % 2, 0);
+
             let empty = Box::new(Descriptor::new(0, None));
             LockfreeVec {
                 descriptor: AtomicPtr::new(Box::into_raw(empty)),
@@ -96,12 +131,12 @@ pub mod lockfree_vec {
         }
 
         pub fn push_back(&self, elem: DataT) {
-            dbg!("push_back elem={}");
+            debug!("push_back elem={}");
             loop {
                 let desc = self.descriptor.load(Ordering::SeqCst);
                 self.complete_write(desc);
                 let desc_ref = unsafe { desc.as_mut().unwrap() };
-                dbg!("push_back elem={} dsize=", elem, desc_ref.size);
+                debug!("push_back elem={} dsize=", elem, desc_ref.size);
                 {
                     let bucket = highest_bit_index(desc_ref.size + FIRST_BUCKET_SIZE) - highest_bit_index(FIRST_BUCKET_SIZE);
                     let bucket_ptr = self.get_bucket(bucket).load(Ordering::SeqCst);
@@ -117,7 +152,7 @@ pub mod lockfree_vec {
                         return;
                     },
                     _ =>  unsafe { 
-                        dbg!("err push back");
+                        debug!("err push back");
                         drop(Box::from_raw(new_desc));
                     }
                 }
@@ -144,22 +179,27 @@ pub mod lockfree_vec {
         }
 
         pub fn read(&self, i : usize) -> DataT {
-            dbg!("read {}", i);
-            self.at(i).load(Ordering::SeqCst) // DataT::from(...)
+            debug!("read {}", i);
+            debug_assert!(i < self.size());
+            self.at(i).load(Ordering::Acquire) // DataT::from(...)
         }
 
         pub fn write(&self, i : usize, elem: DataT) {
-            dbg!("write {}", i);
-            self.at(i).store(elem, Ordering::SeqCst);
+            debug!("write {}", i);
+            debug_assert!(i < self.size());
+            self.at(i).store(elem, Ordering::Release);
         }
 
         pub fn reserve(&self, size : usize) {
-            let mut i = unsafe { highest_bit_index(self.descriptor.load(Ordering::SeqCst).as_ref().unwrap().size + FIRST_BUCKET_SIZE -1) - highest_bit_index(FIRST_BUCKET_SIZE) };
-            i = cmp::max(i, 0);
-
-            while i < highest_bit_index(size + FIRST_BUCKET_SIZE -1) - highest_bit_index(FIRST_BUCKET_SIZE) {
-                i = i + 1;
+            let cur_size = unsafe { self.descriptor.load(Ordering::SeqCst).as_ref().unwrap().size };
+            let mut i = unsafe {
+                    highest_bit_index(cur_size + FIRST_BUCKET_SIZE - (cur_size > 0) as usize)
+                - highest_bit_index(FIRST_BUCKET_SIZE) };
+            let (bucket, idx) = Self::get_bucket_and_pos_at(size-1);
+            debug!("reserve cursize {} i {} bucket={} idx={}", cur_size, i, bucket, idx);
+            while i <= bucket {
                 self.alloc_bucket(i);
+                i = i + 1;
             }
         }
 
@@ -172,27 +212,23 @@ pub mod lockfree_vec {
         }
 
         fn at(&self, i : usize) -> &AtomicUsize {
-            let (bucket, idx) = Self::index_to_bucket_and_pos(i);
-            let bucket_ptr = self.get_bucket(bucket).load(Ordering::SeqCst);
+            let (bucket, idx) = Self::get_bucket_and_pos_at(i);
+            let bucket_ptr = self.get_bucket(bucket).load(Ordering::Acquire);
             let item_ptr =  unsafe { bucket_ptr.offset(idx as isize)};
-            dbg!("bucket_ptr {} offseted ", item_ptr);
-            //dbg!("bucket_ptr {} offseted ", unsafe {bucket_ptr.as_ref().unwrap()});
-            // TODO this is nullXYZ 
-            //let item = unsafe { AtomicUsize::from_mut(&mut **bucket_ptr) };
+            debug!("bucket_ptr {} offseted ", item_ptr);
             let item = unsafe { AtomicUsize::from_ptr(item_ptr as * mut usize) };
-            //let item = unsafe { AtomicUsize::from_ptr(bucket_ptr.as_ref().unwrap().offset(idx as isize)) };
             item
         }
 
         fn complete_write(&self, desc : *mut Descriptor ) {
-            dbg!("complete_write {}");
+            debug!("complete_write {}");
             unsafe {
                 if let Some(ref mut writeop) = (*desc).pending.as_mut() {
                     if !writeop.completed {
                         let ref value = self.at(writeop.pos);
                         match value.compare_exchange(writeop.old_value, writeop.new_value, Ordering::SeqCst, Ordering::Relaxed) {
                             Ok(_) => {
-                                dbg!("wrote {} {} {}", writeop.old_value, writeop.new_value, writeop.pos);
+                                debug!("wrote {} {} {}", writeop.old_value, writeop.new_value, writeop.pos);
                                 writeop.completed = true;
                             },
                             _ => {
@@ -206,32 +242,40 @@ pub mod lockfree_vec {
         }
 
         fn alloc_bucket(&self, bucket: usize) {
-            let bucket_size = FIRST_BUCKET_SIZE.pow(bucket as u32 + 1); // TODO bitshift
+            debug!("alloc bucket={}");
+            let bucket_ptr = self.get_bucket(bucket);
+            if !bucket_ptr.load(Ordering::Relaxed).is_null() {
+                return;
+            }
+
+            let bucket_size = 1 << (highest_bit_index(FIRST_BUCKET_SIZE) + bucket);
             let mem = Vec::with_capacity(bucket_size);
-            dbg!("alloc {} size={}", bucket, bucket_size);
+            debug!("alloc size={}", bucket, bucket_size);
             let (mem_ptr, _, _) = mem.into_raw_parts();
             let null = std::ptr::null_mut();
-            let bucket_ptr = self.get_bucket(bucket);
             match bucket_ptr.compare_exchange(null, mem_ptr, Ordering::SeqCst, Ordering::Relaxed) {
                 Ok(_) => {} ,
-                Err(_) => unsafe { dbg!("alloc err"); drop(Vec::from_raw_parts(mem_ptr, bucket_size, 0)); }
+                Err(_) => unsafe {
+                    // different thread succeeded
+                    drop(Vec::from_raw_parts(mem_ptr, bucket_size, bucket_size));
+                }
             }
         }
 
         fn get_bucket(&self, bucket: usize) -> & AtomicPtr<*mut usize> {
-            dbg!("get_bucket {} {} ", bucket, self.memory[bucket]);
+            //debug!("get_bucket {} {} ", bucket, self.memory[bucket]);
             let addr = std::ptr::addr_of!(self.memory[bucket]);
             unsafe { AtomicPtr::from_ptr(addr as * mut * mut *mut usize) }
             //unsafe { AtomicPtr::from_mut(&mut self.memory[bucket]) }
             //unsafe { AtomicPtr::from_ptr(self.memory[bucket]) }
         }
 
-        fn index_to_bucket_and_pos(i: usize) -> (usize, usize) {
+        fn get_bucket_and_pos_at(i: usize) -> (usize, usize) {
             let pos = i + FIRST_BUCKET_SIZE; // 8 + 8 = 0b1000
             let hibit = highest_bit_index(pos); //  5 should be 3?
             let idx = pos ^ (1 << hibit); //  0b1000 ^ (1 << 3) = 0
             let bucket = hibit - highest_bit_index(FIRST_BUCKET_SIZE);
-            dbg!("at i {} bucket {} idx {} hibit {} pos {} ", i, bucket, idx, hibit, pos);
+            //debug!("at i {} bucket {} idx {} hibit {} pos {} ", i, bucket, idx, hibit, pos);
             return (bucket, idx);
         }
     }
@@ -245,14 +289,14 @@ pub mod lockfree_vec {
 
         #[test]
         fn test_indexing() {
-            assert_eq!((1,0), LockfreeVec::index_to_bucket_and_pos(8));
-            assert_eq!((0,0), LockfreeVec::index_to_bucket_and_pos(0));
-            assert_eq!((0,1), LockfreeVec::index_to_bucket_and_pos(1));
-            assert_eq!((0,2), LockfreeVec::index_to_bucket_and_pos(2));
-            assert_eq!((0,3), LockfreeVec::index_to_bucket_and_pos(3));
-            assert_eq!((0,7), LockfreeVec::index_to_bucket_and_pos(7));
-            assert_eq!((1,0), LockfreeVec::index_to_bucket_and_pos(8));
-            assert_eq!((1,8), LockfreeVec::index_to_bucket_and_pos(16));
+            assert_eq!((0,FIRST_BUCKET_SIZE-1), LockfreeVec::get_bucket_and_pos_at(FIRST_BUCKET_SIZE-1));
+            assert_eq!((0,0), LockfreeVec::get_bucket_and_pos_at(0));
+            assert_eq!((0,1), LockfreeVec::get_bucket_and_pos_at(1));
+            assert_eq!((0,2), LockfreeVec::get_bucket_and_pos_at(2));
+            assert_eq!((0,3), LockfreeVec::get_bucket_and_pos_at(3));
+            assert_eq!((0,7), LockfreeVec::get_bucket_and_pos_at(7));
+            assert_eq!((1,0), LockfreeVec::get_bucket_and_pos_at(FIRST_BUCKET_SIZE));
+            assert_eq!((1,FIRST_BUCKET_SIZE), LockfreeVec::get_bucket_and_pos_at(FIRST_BUCKET_SIZE*2));
         }
 
         #[test]
@@ -269,7 +313,7 @@ pub mod lockfree_vec {
         #[test]
         fn test_push_back() {
             let vec = LockfreeVec::new();
-            for i in 0..640 {
+            for i in 0..512 {
                 vec.push_back(i);
                 assert_eq!(vec.read(i), i);
             }
@@ -278,10 +322,10 @@ pub mod lockfree_vec {
         #[test]
         fn test_pop_back() {
             let vec = LockfreeVec::new();
-            for i in 0..640 {
+            for i in 0..512 {
                 vec.push_back(i);
             }
-            for i in 640..0 {
+            for i in 512..0 {
                 let item = vec.pop_back();
                 assert_eq!(i, item.unwrap());
             }
@@ -301,13 +345,43 @@ pub mod lockfree_vec {
         #[test]
         fn test_read() {
             let vec = LockfreeVec::new();
-            let iterations = 640;
+            let iterations = 512;
             for i in 0..iterations {
                 vec.push_back(i);
             }
             for i in 0..iterations {
                 assert_eq!(vec.read(i), i);
             }
+        }
+
+        #[test]
+        fn test_write() {
+            let vec = LockfreeVec::new();
+            let iterations = 512;
+            vec.reserve(512);
+            for i in 0..iterations {
+                vec.write(i, i);
+            }
+            for i in 0..iterations {
+                assert_eq!(vec.read(i), i);
+            }
+        }
+
+        #[test]
+        fn test_reserve() { // TODO parametrize this test
+            let vec = LockfreeVec::new();
+
+            let check_bucket = |new_size| {
+                vec.reserve(new_size);
+                let (bucket, _) =  LockfreeVec::get_bucket_and_pos_at(new_size-1);
+                assert_eq!(vec.get_bucket(bucket).load(Ordering::Relaxed).is_null(), false);
+                assert_eq!(vec.get_bucket(bucket+1).load(Ordering::Relaxed).is_null(), true);
+            };
+
+            check_bucket(7);
+            check_bucket(8);
+            check_bucket(9);
+            check_bucket(100);
         }
 
         #[test]
@@ -325,15 +399,12 @@ pub mod lockfree_vec {
                 let mut verify_vec = Vec::new();
                 for _ in 0..iterations {
                     loop {
-                        //if vec.size() > 0
-                        {
-                            let item = vec.pop_back();
+                        let item = vec.pop_back();
 
-                            //assert_eq!(item.is_some(), true);
-                            if item.is_some() {
-                                verify_vec.push(item.unwrap());
-                                break;
-                            }
+                        //assert_eq!(item.is_some(), true);
+                        if item.is_some() {
+                            verify_vec.push(item.unwrap());
+                            break;
                         }
                     }
                 }
