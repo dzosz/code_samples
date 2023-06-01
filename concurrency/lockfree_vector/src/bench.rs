@@ -34,4 +34,33 @@ pub mod lockfree_vec {
 
         });
     }
+
+    #[bench]
+    fn bench_st_lockfreevec_push_and_pop(bencher: &mut Bencher) -> impl Termination {
+        let vec = LockfreeVec::new();
+        vec.reserve(LIMIT);
+        let mut iteration : usize = 0;
+        bencher.iter(||  { 
+            let idx = iteration % LIMIT;
+            vec.push_back(idx);
+            let _ = vec.pop_back();
+            iteration += 1;
+
+        });
+    }
+
+    #[bench]
+    fn bench_st_mutex_push_and_pop(bencher: &mut Bencher) -> impl Termination {
+        let mut vec = Vec::new();
+        vec.reserve(LIMIT);
+        let mut iteration : usize = 0;
+        let m = Arc::new(Mutex::new(vec));
+        bencher.iter(||  { 
+            let idx = iteration % LIMIT;
+            m.lock().unwrap().push(idx);
+            let _ = m.lock().unwrap().pop();
+            iteration += 1;
+
+        });
+    }
 }
