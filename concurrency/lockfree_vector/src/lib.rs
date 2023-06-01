@@ -95,19 +95,21 @@ pub mod lockfree_vec {
         }
 
         pub fn pop_back(&self) -> Option<DataT> {
-            let new_desc = self.strategy.alloc();
-            let new_desc_ref = unsafe { new_desc.as_mut().unwrap() };
+            let mut new_desc : *mut Descriptor = std::ptr::null_mut();
 
+            let guard = self.strategy.guard();
             loop {
-                let guard = self.strategy.guard();
                 let desc = self.strategy.access(&guard);
                 let desc_ref = unsafe { desc.as_ref().unwrap() };
 
                 if desc_ref.size == 0 {
                     self.strategy.release_access(desc);
-                    self.strategy.dealloc(new_desc, &guard);
                     return None;
                 }
+                if new_desc.is_null() {
+                    new_desc = self.strategy.alloc();
+                }
+                let new_desc_ref = unsafe { new_desc.as_mut().unwrap() };
 
                 self.complete_write(desc_ref);
 
