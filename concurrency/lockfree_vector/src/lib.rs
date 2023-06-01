@@ -14,7 +14,7 @@ mod strategy;
 pub mod lockfree_vec {
     use crate::descriptor::Descriptor;
     use crate::descriptor::WriteDescriptor;
-    use crate::strategy::SingleReferenceStrategy;
+    use crate::strategy::SpinlockDescriptorStrategy;
     use crate::strategy::EpochGarbageCollectionStrategy;
     use crate::strategy::Strategy;
     use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -42,30 +42,14 @@ pub mod lockfree_vec {
     #[repr(align(64))]
     pub struct LockfreeVec {
         //descriptor: AtomicPtr<Descriptor>, // now nested in strategy
-        memory: Vec<AtomicPtr<AtomicUsize>>,
-        //strategy: SingleReferenceStrategy,
-        strategy: EpochGarbageCollectionStrategy,
+        memory: Vec<AtomicPtr<AtomicUsize>>, // can be static array too
+        //strategy: SpinlockDescriptorStrategy,
+        strategy: Box<dyn Strategy>,
     }
 
     // make safe for multithreaded access
     unsafe impl Send for LockfreeVec {}
     unsafe impl Sync for LockfreeVec {}
-
-    impl Drop for LockfreeVec {
-        fn drop(&mut self) {
-            unsafe {
-                //drop(Box::from_raw(self.descriptor.load(Ordering::SeqCst)));
-                for bucket in 0..self.memory.len() {
-                    let bucket_ptr = self.get_bucket(bucket).load(Ordering::SeqCst);
-                    if bucket_ptr.is_null() {
-                        break; // next buckets are guaranteed to be free
-                    }
-                    let bucket_size = bucket_size(bucket);
-                    drop(Vec::from_raw_parts(bucket_ptr, bucket_size, bucket_size));
-                }
-            }
-        }
-    }
 
     impl LockfreeVec {
         pub fn new() -> LockfreeVec {
@@ -76,11 +60,9 @@ pub mod lockfree_vec {
                 v.push(AtomicPtr::new(std::ptr::null_mut()));
             }
             LockfreeVec {
-                //descriptor: AtomicPtr::new(Box::into_raw(Box::new(Descriptor::new(0, None))),
-                //memory: [std::ptr::null_mut(); 64],
                 memory: v,
-                strategy: EpochGarbageCollectionStrategy::new(),
-                //strategy: SingleReferenceStrategy::new(),
+                strategy: Box::new(EpochGarbageCollectionStrategy::new()),
+                //strategy: Box::new(SpinlockDescriptorStrategy::new()),
             }
         }
 
@@ -161,7 +143,7 @@ pub mod lockfree_vec {
 
         pub fn reserve(&self, size: usize) {
             let guard = self.strategy.guard();
-            let cur_size = self.strategy.as_ref(&guard).size;
+            let cur_size = self.strategy.descriptor(&guard).size;
             let (mut i, _) = Self::get_bucket_and_pos_at(cur_size - (cur_size > 0) as usize);
             if cur_size > 0 {
                 i = i + 1; // we want to allocate only next bucket
@@ -175,7 +157,7 @@ pub mod lockfree_vec {
 
         pub fn size(&self) -> usize {
             let guard = self.strategy.guard();
-            let desc = self.strategy.as_ref(&guard);
+            let desc = self.strategy.descriptor(&guard);
             match desc.pending {
                 Some(ref writeop) => desc.size - (!writeop.completed.load(Ordering::Relaxed) as usize),
                 _ => desc.size,
@@ -241,6 +223,23 @@ pub mod lockfree_vec {
             return (bucket, idx);
         }
     }
+
+    impl Drop for LockfreeVec {
+        fn drop(&mut self) {
+            unsafe {
+                //drop(Box::from_raw(self.descriptor.load(Ordering::SeqCst)));
+                for bucket in 0..self.memory.len() {
+                    let bucket_ptr = self.get_bucket(bucket).load(Ordering::SeqCst);
+                    if bucket_ptr.is_null() {
+                        break; // next buckets are guaranteed to be free
+                    }
+                    let bucket_size = bucket_size(bucket);
+                    drop(Vec::from_raw_parts(bucket_ptr, bucket_size, bucket_size));
+                }
+            }
+        }
+    }
+
 
     #[cfg(test)]
     mod tests {

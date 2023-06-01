@@ -1,23 +1,45 @@
 use crate::descriptor::Descriptor;
-//use crate::descriptor::WriteDescriptor;
 
 use crossbeam_epoch;
 use crossbeam_queue;
 use once_cell::sync::Lazy;
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{Ordering,AtomicPtr};
 use std::thread;
 
-pub trait Strategy<T> {
-    type GuardT = T;
+// Guard intentionally is not using RAII because that would hide part of the lockfree algorithm
+// Drop on Guard should call release() on used resources
+// Ptr should be accessible only through Guard and not be exposed by Strategy
+// Simply not a good code
+pub struct DescriptionGuard {
+    guard: Option<crossbeam_epoch::Guard>,
+    //pub ptr: *mut Descriptor,
+    //strategy: &'a dyn Strategy<'a, GuardT = DescriptionGuard<'a>>,
+}
+
+
+impl DescriptionGuard {
+    fn new(guard : Option<crossbeam_epoch::Guard>) -> Self {
+        DescriptionGuard { 
+            guard,
+        }
+    }
+
+    //pub fn as_ref(&self) -> &Descriptor {
+    //    unsafe { self.ptr.as_ref().unwrap() }
+    //}
+}
+
+pub trait Strategy {
+    // type GuardT = DescriptionGuard;
     //fn update(&self, f: impl Fn(&mut Descriptor));
-    fn guard(&self) -> T;
+    fn guard(&self) -> DescriptionGuard;
     fn alloc(&self) -> *mut Descriptor;
-    fn access(&self, guard: &Self::GuardT) -> *mut Descriptor;
+    fn access(&self, guard: &DescriptionGuard) -> *mut Descriptor;
     fn release_access(&self, desc: *mut Descriptor);
-    fn dealloc(&self, new_desc: *mut Descriptor, guard: &Self::GuardT);
-    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, guard: &Self::GuardT) -> bool;
-    fn as_ref(&self, guard: &Self::GuardT) -> &Descriptor;
+    fn dealloc(&self, new_desc: *mut Descriptor, guard: &DescriptionGuard);
+    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, guard: &DescriptionGuard) -> bool;
+    fn descriptor(&self, guard: &DescriptionGuard) -> &Descriptor;
 }
 
 // TODO add destructor
@@ -43,14 +65,6 @@ fn free_to_buffer(obj: Box<Descriptor>) {
         }
     }
 }
-
-// FIXME this Reclamation Strategy is not lockfree as it uses Descriptor.counter as a spinlock
-// this approach ensures that no ABA problem exists
-// TODO replace with handcrafted epoch/hazard pointers?
-pub struct SingleReferenceStrategy {
-    source: AtomicPtr<Descriptor>,
-}
-
 // Epoch based reclamation strategy
 // Slow!
 pub struct EpochGarbageCollectionStrategy {
@@ -65,51 +79,59 @@ impl EpochGarbageCollectionStrategy {
     }
 }
 
-impl Strategy<crossbeam_epoch::Guard> for EpochGarbageCollectionStrategy {
-    fn as_ref(&self, guard: &Self::GuardT) -> &Descriptor {
+impl Strategy for EpochGarbageCollectionStrategy {
+    fn descriptor(&self, guard: &DescriptionGuard) -> &Descriptor {
         unsafe { self.access(&guard).as_ref().unwrap() }
     }
-    fn guard(&self) -> crossbeam_epoch::Guard {
-        return crossbeam_epoch::pin();
+
+    fn guard(&self) -> DescriptionGuard {
+        return DescriptionGuard::new(Some(crossbeam_epoch::pin()));
+
     }
 
     fn alloc(&self) -> *mut Descriptor {
         Box::into_raw(alloc_from_buffer())
     }
-    fn access(&self, guard: &Self::GuardT) -> *mut Descriptor {
-        self.source.load(Ordering::Relaxed, &guard).as_raw() as *mut Descriptor
+
+    fn access(&self, guard: &DescriptionGuard) -> *mut Descriptor {
+        self.source.load(Ordering::Relaxed, &guard.guard.as_ref().unwrap()).as_raw() as *mut Descriptor
     }
 
     fn release_access(&self, _desc: *mut Descriptor) {}
 
-    fn dealloc(&self, new_desc: *mut Descriptor, guard: &Self::GuardT) {
+    fn dealloc(&self, new_desc: *mut Descriptor, guard: &DescriptionGuard) {
         let prev = crossbeam_epoch::Shared::from(new_desc as *const Descriptor);
         unsafe {
-            guard.defer_unchecked(move || free_to_buffer(prev.into_owned().into_box()));
+            guard.guard.as_ref().unwrap().defer_unchecked(move || free_to_buffer(prev.into_owned().into_box()));
         }
     }
 
-    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, guard: &Self::GuardT) -> bool {
+    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, guard: &DescriptionGuard) -> bool {
         let new_obj = unsafe { crossbeam_epoch::Owned::from_raw(new_desc) };
         let prev = crossbeam_epoch::Shared::from(prev as *const _);
         let freed = self.source.compare_exchange(
             prev,
-            new_obj.into_shared(&guard),
+            new_obj.into_shared(&guard.guard.as_ref().unwrap()),
             Ordering::SeqCst,
             Ordering::Relaxed,
-            &guard,
+            &guard.guard.as_ref().unwrap(),
         );
 
         freed.is_ok()
     }
 }
 
-impl Strategy<()> for SingleReferenceStrategy {
-    //fn update(&self, f: impl Fn(&mut Descriptor)) {
-    //    f(self.as_mut());
-    //}
-    fn guard(&self) {
-        return ();
+
+// FIXME this Reclamation Strategy is not lockfree as it uses Descriptor.counter as a spinlock
+// this approach ensures that no ABA problem exists
+// TODO replace with handcrafted epoch/hazard pointers?
+pub struct SpinlockDescriptorStrategy {
+    source: AtomicPtr<Descriptor>,
+}
+
+impl Strategy for SpinlockDescriptorStrategy {
+    fn guard(&self) -> DescriptionGuard {
+        return DescriptionGuard::new(None);
     }
 
     // allocate from thread local cache
@@ -137,7 +159,7 @@ impl Strategy<()> for SingleReferenceStrategy {
 
     // spinlock protected access
     // TODO move to the guard and use RAII if possible?
-    fn access(&self, _guard: &Self::GuardT) -> *mut Descriptor {
+    fn access(&self, _guard: &DescriptionGuard) -> *mut Descriptor {
         loop {
             let ptr = self.as_ptr();
             unsafe {
@@ -165,7 +187,7 @@ impl Strategy<()> for SingleReferenceStrategy {
         }
     }
 
-    fn dealloc(&self, new_desc: *mut Descriptor, _guard: &Self::GuardT) {
+    fn dealloc(&self, new_desc: *mut Descriptor, _guard: &DescriptionGuard) {
         DESCRIPTOR_CACHE.with_borrow_mut(|v| {
             v.push(new_desc);
         });
@@ -179,7 +201,7 @@ impl Strategy<()> for SingleReferenceStrategy {
         };
     }
 
-    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, _guard: &Self::GuardT) -> bool {
+    fn swap(&self, prev: *mut Descriptor, new_desc: *mut Descriptor, _guard: &DescriptionGuard) -> bool {
         match self
             .source
             .compare_exchange(prev, new_desc, Ordering::SeqCst, Ordering::Relaxed)
@@ -188,20 +210,16 @@ impl Strategy<()> for SingleReferenceStrategy {
             Err(_) => false,
         }
     }
-    fn as_ref(&self, _guard: &Self::GuardT) -> &Descriptor {
+    fn descriptor(&self, _guard: &DescriptionGuard) -> &Descriptor {
         unsafe { self.as_ptr().as_ref().unwrap() }
     }
 }
 
-impl SingleReferenceStrategy {
-    pub fn new() -> SingleReferenceStrategy {
-        SingleReferenceStrategy {
+impl SpinlockDescriptorStrategy {
+    pub fn new() -> SpinlockDescriptorStrategy {
+        SpinlockDescriptorStrategy {
             source: AtomicPtr::new(Box::into_raw(Box::new(Descriptor::new(0, None)))),
         }
-    }
-
-    pub fn as_mut(&self) -> &mut Descriptor {
-        unsafe { self.as_ptr().as_mut().unwrap() }
     }
 
     pub fn as_ptr(&self) -> *mut Descriptor {

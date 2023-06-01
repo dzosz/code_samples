@@ -7,7 +7,7 @@ pub struct WriteDescriptor {
     pub old_value: DataT,
     pub new_value: DataT,
     pub pos: usize, // pos in memory array
-    pub completed: AtomicBool, // TODO make atomic?
+    pub completed: AtomicBool,
 }
 
 impl WriteDescriptor {
