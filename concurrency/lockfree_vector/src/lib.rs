@@ -41,7 +41,7 @@ pub mod lockfree_vec {
 
     #[repr(align(64))]
     pub struct LockfreeVec {
-        //descriptor: AtomicPtr<Descriptor>, // now nested in strategy
+        //descriptor: AtomicPtr<Descriptor>, // moved to strategy
         memory: Vec<AtomicPtr<AtomicUsize>>, // can be static array too
         //strategy: SpinlockDescriptorStrategy,
         strategy: Box<dyn Strategy>,
@@ -55,12 +55,8 @@ pub mod lockfree_vec {
         pub fn new() -> LockfreeVec {
             assert_eq!(FIRST_BUCKET_SIZE % 2, 0);
 
-            let mut v: Vec<AtomicPtr<AtomicUsize>> = Vec::with_capacity(64);
-            for _ in 0..64 {
-                v.push(AtomicPtr::new(std::ptr::null_mut()));
-            }
             LockfreeVec {
-                memory: v,
+                memory: (0..64).map(|_| AtomicPtr::new(std::ptr::null_mut())).collect(),
                 strategy: Box::new(EpochGarbageCollectionStrategy::new()),
                 //strategy: Box::new(SpinlockDescriptorStrategy::new()),
             }
