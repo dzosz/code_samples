@@ -1,6 +1,7 @@
 extern crate test;
 
-pub mod lockfree_vec {
+#[cfg(test)]
+pub mod tests {
     use super::test::Bencher;
     use std::process::Termination;
     use crate::lockfree_vec::*;
