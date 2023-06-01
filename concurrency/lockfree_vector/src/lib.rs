@@ -66,8 +66,8 @@ pub mod lockfree_vec {
             let new_desc = self.strategy.alloc();
             let new_desc_ref = unsafe { new_desc.as_mut().unwrap() };
 
+            let guard = self.strategy.guard();
             loop {
-                let guard = self.strategy.guard();
                 let desc = self.strategy.access(&guard);
                 let desc_ref = unsafe { desc.as_ref().unwrap() };
                 self.complete_write(desc_ref);
