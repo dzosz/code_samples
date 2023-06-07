@@ -1,4 +1,9 @@
+.PHONY= all
+
 all: test_mysharedptr test_myweakptr
+	./test_mysharedptr
+	./test_myweakptr
+
 
 test_mysharedptr: mysharedptr.h test_mysharedptr.cpp
 	$(CXX) test_mysharedptr.cpp -g -o $@

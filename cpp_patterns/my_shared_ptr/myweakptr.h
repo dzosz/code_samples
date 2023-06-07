@@ -8,17 +8,12 @@ struct MyWeakPtr {
 	MyWeakPtr() = default;
 
 	MyWeakPtr(const MySharedPtr<T>& shd) {
-		counter = shd.counter;
-		weak = shd.weak;
-		ptr = shd.ptr;
-
+		block = shd.block;
 		increment();
 	}
 
 	MyWeakPtr(MyWeakPtr<T>& other) {
-		counter = other.counter;
-		weak = other.weak;
-		ptr = other.ptr;
+		block = other.block;
 		increment();
 	}
 
@@ -28,20 +23,16 @@ struct MyWeakPtr {
 	}
 
 	MyWeakPtr& operator=(const MyWeakPtr& other) {
-		counter = other.counter;
-		weak = other.weak;
-		ptr = other.ptr;
+		auto old = std::move(*this);
+		block = other.block;
 		increment();
 		return *this;
 	}
 
 	MyWeakPtr& operator=(MyWeakPtr&& other) {
-		std::swap(counter, other.counter);
-		std::swap(ptr, other.ptr);
-		std::swap(weak, other.weak);
+		std::swap(block, other.block);
 		return *this;
 	}
-
 
 	~MyWeakPtr() {
 		decrement();
@@ -49,54 +40,47 @@ struct MyWeakPtr {
 
 	MySharedPtr<T> lock() {
 		MySharedPtr<T> tmp;
-		tmp.counter = counter;
-		tmp.weak = weak;
-		tmp.ptr = ptr;
+		tmp.block = block;
 		tmp.increment();
 
 		return tmp;
 	}
 
 	bool expired() const {
-		return !counter || (*counter) == 0;
+		return !block || block->counter == 0;
 	}
 
 	//return use count of shared ptr
 	int use_count() const {
-		if (counter)
-			return *counter;
+		if (block)
+			return block->counter;
 		return 0;
 	}
 
 	int weak_count() const {
-		if (weak)
-			return *weak;
+		if (block)
+			return block->weak;
 		return 0;
 	}
 
 	private:
 	void increment() {
-		if (weak) 
-			(*weak)++;
+		if (block) 
+			block->weak++;
 	}
 
 	void decrement() {
-		if (!weak)
+		if (!block)
 			return;
 
-		(*weak)--;
-		if (*weak == 0 && *counter == 0) {
-			delete[] counter;
-			// delete weak; // allocated together with counter
-			delete ptr;
+		block->weak--;
+		if (block->weak == 0 && block->counter == 0) {
+			delete block->ptr;
+			delete block;
 
-			weak = 0;
-			counter = 0;
-			ptr = 0;
+			block = nullptr;
 		}
 	}
 
-	mutable int* counter = 0; // counter of shared pointers
-	mutable int* weak = 0;    // counter of weak pointers
-	T* ptr = 0;
+	typename MySharedPtr<T>::ControlBlock* block = nullptr;
 };
