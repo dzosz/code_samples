@@ -3,11 +3,15 @@
 #include "mysharedptr.h"
 #include <utility>
 
+namespace mysharedptr
+{
+
 template <typename T>
-struct MyWeakPtr {
+class MyWeakPtr {
+	public:
 	MyWeakPtr() = default;
 
-	MyWeakPtr(const MySharedPtr<T>& shd) {
+	explicit MyWeakPtr(const MySharedPtr<T>& shd) {
 		block = shd.block;
 		increment();
 	}
@@ -17,12 +21,11 @@ struct MyWeakPtr {
 		increment();
 	}
 
-
 	MyWeakPtr(MyWeakPtr<T>&& other) {
 		*this = std::move(other);
 	}
 
-	MyWeakPtr& operator=(const MyWeakPtr& other) {
+	MyWeakPtr<T>& operator=(const MyWeakPtr<T>& other) {
 		auto old = std::move(*this);
 		block = other.block;
 		increment();
@@ -47,40 +50,37 @@ struct MyWeakPtr {
 	}
 
 	bool expired() const {
-		return !block || block->counter == 0;
+		return !block || block->count() == 0;
 	}
 
 	//return use count of shared ptr
-	int use_count() const {
+	unsigned use_count() const {
 		if (block)
-			return block->counter;
+			return block->count();
 		return 0;
 	}
 
-	int weak_count() const {
+	unsigned weak_count() const {
 		if (block)
-			return block->weak;
+			return block->weak_count();
 		return 0;
 	}
 
 	private:
 	void increment() {
 		if (block) 
-			block->weak++;
+			block->increment_weak();
 	}
 
 	void decrement() {
 		if (!block)
 			return;
 
-		block->weak--;
-		if (block->weak == 0 && block->counter == 0) {
-			delete block->ptr;
-			delete block;
-
-			block = nullptr;
-		}
+		block->decrement_weak();
+		block = nullptr;
 	}
 
 	typename MySharedPtr<T>::ControlBlock* block = nullptr;
 };
+
+}
