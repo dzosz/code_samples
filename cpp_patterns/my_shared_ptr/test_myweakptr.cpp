@@ -2,6 +2,10 @@
 #include <myweakptr.h>
 #include <cassert>
 
+namespace mysharedptr
+{
+namespace {
+
 void test_empty() {
 	MySharedPtr<int> a;
 	MyWeakPtr<int> w(a);
@@ -30,6 +34,7 @@ void test_reset() {
 	a.reset(nullptr);
 	assert(a.use_count() == 0);
 	assert(w.use_count() == 0);
+	assert(w.weak_count() == 1);
 	assert(w.expired());
 }
 
@@ -63,8 +68,12 @@ void test_copy() {
 	assert(w2.weak_count() == 2);
 	assert(w.weak_count() == 2);
 }
+}
+
+}
 
 int main() {
+	using namespace mysharedptr;
 	test_empty();
 	test_lock();
 	test_reset();
