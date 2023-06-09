@@ -14,7 +14,7 @@ mod strategy;
 pub mod lockfree_vec {
     use crate::descriptor::Descriptor;
     use crate::descriptor::WriteDescriptor;
-    use crate::strategy::SpinlockDescriptorStrategy;
+    use crate::strategy::RefcountedDescriptorStrategy;
     use crate::strategy::EpochGarbageCollectionStrategy;
     use crate::strategy::Strategy;
     use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
@@ -43,7 +43,6 @@ pub mod lockfree_vec {
     pub struct LockfreeVec {
         //descriptor: AtomicPtr<Descriptor>, // moved to strategy
         memory: Vec<AtomicPtr<AtomicUsize>>, // can be static array too
-        //strategy: SpinlockDescriptorStrategy,
         strategy: Box<dyn Strategy>,
     }
 
@@ -57,8 +56,8 @@ pub mod lockfree_vec {
 
             LockfreeVec {
                 memory: (0..64).map(|_| AtomicPtr::new(std::ptr::null_mut())).collect(),
-                strategy: Box::new(EpochGarbageCollectionStrategy::new()),
-                //strategy: Box::new(SpinlockDescriptorStrategy::new()),
+                //strategy: Box::new(EpochGarbageCollectionStrategy::new()),
+                strategy: Box::new(RefcountedDescriptorStrategy::new()),
             }
         }
 

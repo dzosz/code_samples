@@ -16,9 +16,10 @@ Lockfree vector achieves thread safety by splitting moving parts and accessing t
 
 In original implementation descriptor consists of reference counter (for lifeteime management), new store value, previous value and index of change. Previous value is required for conditional CAS execution, however this approach is susceptible to 'ABA' errors. CAS operation suceeds if previous pointer is the same, but there's no guarantee that this value was not changed in the meantime.
 
-The paper does go into the details of the strategy for Descriptor object lifetime management, so two object reclamation were chosen for this implementation
-* spinlock protected descriptor (uses counter that is inside Descriptor struct)
+The paper does go into the details of the strategy for Descriptor object lifetime management, so two different object reclamation strategies were chosen for this implementation.
+* refcounted protected descriptor (uses thread local counter that is inside Descriptor struct)
 * Epoch based reclamation (Rust crossbeam library was used)
+* Hazard pointer TODO
 
 ### Data layout
 Classic vector is made up of 3 parts: size, capacity and pointer to contiguous data. In Lockfree Vector allocated data is not a single buffer, but a two level array - array of pointers to increasingly sized buffers. The initial memory bucket has been arbitrarily chosen to 8 elements and use growth factor of 2 which requires additional log2N memory.

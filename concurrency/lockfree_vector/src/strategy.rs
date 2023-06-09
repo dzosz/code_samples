@@ -8,15 +8,11 @@ use std::sync::atomic::{Ordering,AtomicPtr};
 use std::thread;
 
 // Guard intentionally is not using RAII because that would hide part of the lockfree algorithm
-// Drop on Guard should call release() on used resources
-// Ptr should be accessible only through Guard and not be exposed by Strategy
-// Simply not a good code
+// Drop on Guard could call release() on used resources
+// Also Ptr could be accessible only through Guard and not be exposed by Strategy
 pub struct DescriptionGuard {
     guard: Option<crossbeam_epoch::Guard>,
-    //pub ptr: *mut Descriptor,
-    //strategy: &'a dyn Strategy<'a, GuardT = DescriptionGuard<'a>>,
 }
-
 
 impl DescriptionGuard {
     fn new(guard : Option<crossbeam_epoch::Guard>) -> Self {
@@ -30,6 +26,8 @@ impl DescriptionGuard {
     //}
 }
 
+// The strategy does not only take care of creating changes to lockfree vector 
+// with Descriptor but also manages their lifetime
 pub trait Strategy {
     // type GuardT = DescriptionGuard;
     //fn update(&self, f: impl Fn(&mut Descriptor));
@@ -44,7 +42,7 @@ pub trait Strategy {
 
 // TODO add destructor
 thread_local! {
-static DESCRIPTOR_CACHE: RefCell<Vec<*mut Descriptor>> = RefCell::new(Vec::with_capacity(8));
+static TLS_DESCRIPTOR_CACHE: RefCell<Vec<Box<Descriptor>>> = RefCell::new(Vec::with_capacity(8));
 }
 
 static DESCRIPTOR_BUFFER: Lazy<crossbeam_queue::ArrayQueue<Box<Descriptor>>> = Lazy::new(|| {
@@ -65,8 +63,7 @@ fn free_to_buffer(obj: Box<Descriptor>) {
         }
     }
 }
-// Epoch based reclamation strategy
-// Slow!
+
 pub struct EpochGarbageCollectionStrategy {
     source: crossbeam_epoch::Atomic<Descriptor>,
 }
@@ -122,33 +119,31 @@ impl Strategy for EpochGarbageCollectionStrategy {
 }
 
 
-// FIXME this Reclamation Strategy is not lockfree as it uses Descriptor.counter as a spinlock
-// this approach ensures that no ABA problem exists
-// TODO replace with handcrafted epoch/hazard pointers?
-pub struct SpinlockDescriptorStrategy {
+// TODO this approach requires additional review
+pub struct RefcountedDescriptorStrategy {
     source: AtomicPtr<Descriptor>,
 }
 
-impl Strategy for SpinlockDescriptorStrategy {
+impl Strategy for RefcountedDescriptorStrategy {
     fn guard(&self) -> DescriptionGuard {
         return DescriptionGuard::new(None);
     }
 
     // allocate from thread local cache
+    // use first ptr that has use count == 0
     fn alloc(&self) -> *mut Descriptor {
         let mut reclaimed = std::ptr::null_mut();
 
-        DESCRIPTOR_CACHE.with_borrow_mut(|v| {
+        TLS_DESCRIPTOR_CACHE.with_borrow_mut(|v| {
             if let Some(idx) = v.iter().position(|ptr| {
-                let desc = unsafe { ptr.as_mut().unwrap() };
-                return desc
+                return ptr
                     .counter
                     .compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed)
                     .is_ok();
             }) {
-                reclaimed = v.swap_remove(idx);
+                reclaimed = Box::into_raw(v.swap_remove(idx));
             } else {
-                // empty cache - allocate
+                // empty cache - allocate new instance
                 let boxed = Box::new(Descriptor::new(0, None));
                 boxed.counter.store(1, Ordering::Relaxed);
                 reclaimed = Box::into_raw(boxed);
@@ -157,19 +152,21 @@ impl Strategy for SpinlockDescriptorStrategy {
         reclaimed
     }
 
-    // spinlock protected access
     // TODO move to the guard and use RAII if possible?
+    // uses double head checking to avoid ABA problem with alloc()
+    // similar to hazard ptr protect()
     fn access(&self, _guard: &DescriptionGuard) -> *mut Descriptor {
         loop {
             let ptr = self.as_ptr();
             unsafe {
-                if ptr
+                ptr
                     .as_ref()
                     .unwrap()
                     .counter
-                    .compare_exchange(0, 1, Ordering::SeqCst, Ordering::Relaxed)
-                    .is_err()
+                    .fetch_add(1, Ordering::SeqCst);
+                if ptr != self.as_ptr()
                 {
+                    self.release_access(ptr);
                     thread::yield_now();
                     continue;
                 }
@@ -188,8 +185,8 @@ impl Strategy for SpinlockDescriptorStrategy {
     }
 
     fn dealloc(&self, new_desc: *mut Descriptor, _guard: &DescriptionGuard) {
-        DESCRIPTOR_CACHE.with_borrow_mut(|v| {
-            v.push(new_desc);
+        TLS_DESCRIPTOR_CACHE.with_borrow_mut(|v| {
+            v.push(unsafe { Box::from_raw(new_desc) } );
         });
 
         unsafe {
@@ -215,9 +212,9 @@ impl Strategy for SpinlockDescriptorStrategy {
     }
 }
 
-impl SpinlockDescriptorStrategy {
-    pub fn new() -> SpinlockDescriptorStrategy {
-        SpinlockDescriptorStrategy {
+impl RefcountedDescriptorStrategy {
+    pub fn new() -> RefcountedDescriptorStrategy {
+        RefcountedDescriptorStrategy {
             source: AtomicPtr::new(Box::into_raw(Box::new(Descriptor::new(0, None)))),
         }
     }
