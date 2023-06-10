@@ -91,7 +91,7 @@ impl Strategy for EpochGarbageCollectionStrategy {
     }
 
     fn access(&self, guard: &DescriptionGuard) -> *mut Descriptor {
-        self.source.load(Ordering::Relaxed, &guard.guard.as_ref().unwrap()).as_raw() as *mut Descriptor
+        self.source.load(Ordering::SeqCst, &guard.guard.as_ref().unwrap()).as_raw() as *mut Descriptor
     }
 
     fn release_access(&self, _desc: *mut Descriptor) {}
